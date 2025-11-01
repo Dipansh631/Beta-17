@@ -17,7 +17,7 @@ export default defineConfig(() => ({
         rewrite: (path) => path.replace(/^\/api\/clip/, '/api/clip'),
       },
       '/api/docext': {
-        target: 'http://localhost:8001',
+        target: 'http://localhost:5000',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/docext/, '/api/docext'),
       },

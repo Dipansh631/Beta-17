@@ -134,8 +134,14 @@ const RegisterNGO = () => {
           try {
             const base64Image = e.target?.result as string;
             
-            // Extract using docext
-            const extracted = await extractAadhaarDetails(base64Image);
+            // Extract using docext with toast callback for error handling
+            const extracted = await extractAadhaarDetails(base64Image, (errorMsg) => {
+              toast({
+                title: "Document extraction failed",
+                description: errorMsg || "Please check backend.",
+                variant: "destructive",
+              });
+            });
             
             // Map to AadhaarData format
             resolve({
@@ -147,8 +153,25 @@ const RegisterNGO = () => {
             });
           } catch (err: any) {
             console.error("Aadhaar extraction error:", err);
-            // If extraction fails, show error but don't reject - let user enter manually
-            setError(err.message || "Failed to extract Aadhaar details. Please enter manually.");
+            const errorMessage = err.message || "Failed to extract Aadhaar details. Please enter manually.";
+            
+            // Show toast notification
+            toast({
+              title: "Document extraction failed",
+              description: errorMessage.includes("backend") 
+                ? errorMessage 
+                : "Please check backend.",
+              variant: "destructive",
+            });
+            
+            // If it's a connection error, provide clear instructions
+            if (errorMessage.includes("connect") || errorMessage.includes("server") || errorMessage.includes("running")) {
+              setError(
+                `Docext server is not available. ${errorMessage}. Please start the docext servers to enable automatic extraction, or enter details manually.`
+              );
+            } else {
+              setError(errorMessage);
+            }
             reject(err);
           }
         };

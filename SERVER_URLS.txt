@@ -1,0 +1,33 @@
+=================================================================
+  SERVER URLs - Quick Reference
+=================================================================
+
+✅ Frontend Dev Server (React App)
+   URL: http://localhost:8080
+   Status: Check if page loads
+
+✅ Docext API Server
+   Health Check: http://localhost:8001/health
+   Extract Endpoint: http://localhost:8001/api/docext/extract
+   Status: Should return JSON {"status":"ok",...}
+
+✅ Docext Gradio Server (If needed)
+   URL: http://localhost:7860
+   Status: Should show login/interface page
+
+✅ CLIP API Server (For logo validation)
+   Health Check: http://localhost:8000/health
+   Status: Should return JSON
+
+=================================================================
+  TESTING CHECKLIST
+=================================================================
+
+[ ] Frontend accessible at http://localhost:8080
+[ ] Can navigate to /register-ngo page
+[ ] API health check works: http://localhost:8001/health
+[ ] Upload Aadhaar photo works without errors
+[ ] Logo validation works (if CLIP server running)
+
+=================================================================
+
