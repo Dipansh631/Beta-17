@@ -10,6 +10,18 @@ export default defineConfig(() => ({
     hmr: {
       overlay: true,
     },
+    proxy: {
+      '/api/clip': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/clip/, '/api/clip'),
+      },
+      '/api/docext': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/docext/, '/api/docext'),
+      },
+    },
   },
   plugins: [react()],
   resolve: {

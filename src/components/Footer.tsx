@@ -30,7 +30,7 @@ const Footer = () => {
                 </Link>
               </li>
               <li>
-                <Link to="/ngo-dashboard" className="text-sm text-muted-foreground transition-smooth hover:text-accent">
+                <Link to="/register-ngo" className="text-sm text-muted-foreground transition-smooth hover:text-accent">
                   For NGOs
                 </Link>
               </li>

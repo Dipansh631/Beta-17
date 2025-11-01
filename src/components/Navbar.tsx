@@ -54,7 +54,7 @@ const Navbar = () => {
             <Link to="/about" className="text-sm font-medium transition-smooth hover:text-accent">
               How It Works
             </Link>
-            <Link to="/ngo-dashboard" className="text-sm font-medium transition-smooth hover:text-accent">
+            <Link to="/register-ngo" className="text-sm font-medium transition-smooth hover:text-accent">
               For NGOs
             </Link>
           </div>
@@ -139,7 +139,7 @@ const Navbar = () => {
                 How It Works
               </Link>
               <Link
-                to="/ngo-dashboard"
+                to="/register-ngo"
                 className="text-sm font-medium transition-smooth hover:text-accent"
                 onClick={() => setIsMenuOpen(false)}
               >

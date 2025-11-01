@@ -213,7 +213,7 @@ const Home = () => {
                 <Link to="/campaigns">Start Donating</Link>
               </Button>
               <Button size="lg" variant="outline" asChild className="text-lg px-8 bg-accent-foreground/10 border-accent-foreground/20 hover:bg-accent-foreground/20">
-                <Link to="/ngo-dashboard">Register as NGO</Link>
+                <Link to="/register-ngo">Register as NGO</Link>
               </Button>
             </div>
           </Card>
