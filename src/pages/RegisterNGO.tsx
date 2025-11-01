@@ -1,9 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { db, storage } from "@/integrations/firebase/config";
-import { collection, addDoc } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import axios from "axios";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,6 +17,14 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Upload,
   Camera,
   CheckCircle2,
@@ -28,51 +34,42 @@ import {
   ArrowRight,
   Loader2,
   Check,
-  Copy,
-  UserPlus,
+  User,
   FileText,
-  Building2,
-  Sparkles,
-  AlertTriangle,
-  Image as ImageIcon,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { useToast } from "@/hooks/use-toast";
-import {
-  matchImageToTexts,
-  validateImageDomain,
-  autoTagNGOType,
-  validateConditionImage,
-} from "@/services/clipService";
-import { extractAadhaarDetails } from "@/services/docextService";
 
 // Types
-interface AadhaarData {
+interface IdData {
   name: string;
   dob: string;
   gender: string;
-  mobile: string;
   address: string;
+  id_number: string;
+  id_type: string;
 }
 
 interface FundingCondition {
   id: string;
   title: string;
   description: string;
-  estimatedFund: string;
+  fund_estimate: string;
   priority: "High" | "Medium" | "Low";
-  validationResult?: {
-    isValid: boolean;
-    confidence: number;
-  };
 }
 
-interface InvitedMember {
-  id: string;
-  email: string;
-  status: "pending" | "verified" | "removed";
-}
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+
+// Use proxy in development (Vite proxy)
+const getApiUrl = (endpoint: string) => {
+  // In development, use Vite proxy (/api goes to http://localhost:3000/api)
+  // In production, use full URL
+  if (import.meta.env.DEV) {
+    return endpoint; // Use relative URL for proxy
+  }
+  return `${API_BASE_URL}${endpoint}`;
+};
 
 const RegisterNGO = () => {
   const { currentUser } = useAuth();
@@ -82,171 +79,240 @@ const RegisterNGO = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Step 1: Owner Verification
-  const [aadhaarFile, setAadhaarFile] = useState<File | null>(null);
-  const [aadhaarPreview, setAadhaarPreview] = useState<string | null>(null);
-  const [aadhaarData, setAadhaarData] = useState<AadhaarData | null>(null);
-  const [aadhaarConfirmed, setAadhaarConfirmed] = useState(false);
-  const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
-  const [profilePhotoConfirmed, setProfilePhotoConfirmed] = useState(false);
-  const [webcamActive, setWebcamActive] = useState(false);
+  // Step 1: ID Upload & Extraction
+  const [idFile, setIdFile] = useState<File | null>(null);
+  const [idPreview, setIdPreview] = useState<string | null>(null);
+  const [idData, setIdData] = useState<IdData>({
+    name: "",
+    dob: "",
+    gender: "",
+    address: "",
+    id_number: "",
+    id_type: "",
+  });
+  const [extracting, setExtracting] = useState(false);
+  const [idConfirmed, setIdConfirmed] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Step 2: Face Verification
+  const [facePhoto, setFacePhoto] = useState<string | null>(null);
+  const [faceVerified, setFaceVerified] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Step 2: Organization Information
-  const [orgName, setOrgName] = useState("");
-  const [orgDescription, setOrgDescription] = useState("");
-  const [orgEmail, setOrgEmail] = useState("");
-  const [orgPhone, setOrgPhone] = useState("");
-  const [orgAddress, setOrgAddress] = useState("");
-  const [orgLogo, setOrgLogo] = useState<File | null>(null);
-  const [orgLogoPreview, setOrgLogoPreview] = useState<string | null>(null);
-  const [logoValidation, setLogoValidation] = useState<{
-    isValid: boolean;
-    confidence: number;
-    tags: { tag: string; confidence: number }[];
-    validating: boolean;
-  } | null>(null);
-
-  // Step 3: Funding Conditions
+  // Step 3: NGO Details
+  const [ngoName, setNgoName] = useState("");
+  const [ngoDescription, setNgoDescription] = useState("");
+  const [donationCategory, setDonationCategory] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
   const [conditions, setConditions] = useState<FundingCondition[]>([]);
   const [newCondition, setNewCondition] = useState<Partial<FundingCondition>>({
     title: "",
     description: "",
-    estimatedFund: "",
+    fund_estimate: "",
     priority: "Medium",
   });
 
-  // Step 4: Members
-  const [inviteLink, setInviteLink] = useState("");
-  const [members, setMembers] = useState<InvitedMember[]>([]);
-
-  // Step 5: Final data
-  const [submitted, setSubmitted] = useState(false);
-
-  // Extract Aadhaar data using docext
-  const extractAadhaarData = async (file: File): Promise<AadhaarData> => {
-    return new Promise(async (resolve, reject) => {
-      try {
-        // Convert file to base64
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-          try {
-            const base64Image = e.target?.result as string;
-            
-            // Extract using docext with toast callback for error handling
-            const extracted = await extractAadhaarDetails(base64Image, (errorMsg) => {
-              toast({
-                title: "Document extraction failed",
-                description: errorMsg || "Please check backend.",
-                variant: "destructive",
-              });
-            });
-            
-            // Map to AadhaarData format
-            resolve({
-              name: extracted.name || "",
-              dob: extracted.dob || "",
-              gender: extracted.gender || "",
-              mobile: extracted.mobile || "",
-              address: extracted.address || "",
-            });
-          } catch (err: any) {
-            console.error("Aadhaar extraction error:", err);
-            const errorMessage = err.message || "Failed to extract Aadhaar details. Please enter manually.";
-            
-            // Show toast notification
-            toast({
-              title: "Document extraction failed",
-              description: errorMessage.includes("backend") 
-                ? errorMessage 
-                : "Please check backend.",
-              variant: "destructive",
-            });
-            
-            // If it's a connection error, provide clear instructions
-            if (errorMessage.includes("connect") || errorMessage.includes("server") || errorMessage.includes("running")) {
-              setError(
-                `Docext server is not available. ${errorMessage}. Please start the docext servers to enable automatic extraction, or enter details manually.`
-              );
-            } else {
-              setError(errorMessage);
-            }
-            reject(err);
-          }
-        };
-        reader.onerror = () => {
-          reject(new Error("Failed to read file"));
-        };
-        reader.readAsDataURL(file);
-      } catch (error: any) {
-        reject(error);
-      }
-    });
-  };
-
-  // Handle Aadhaar upload
-  const handleAadhaarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Step 1: Handle ID Upload & Extraction
+  const handleIdUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith("image/")) {
-      setError("Please upload an image file");
+    if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
+      setError("Please upload an image (JPG, PNG) or PDF file");
       return;
     }
 
-    setAadhaarFile(file);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      setAadhaarPreview(e.target?.result as string);
-    };
-    reader.readAsDataURL(file);
-
-    // Extract Aadhaar data using docext
-    setLoading(true);
+    setIdFile(file);
     setError("");
+    setExtracting(true);
+    setIdConfirmed(false);
+
+    // Show preview for images
+    if (file.type.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        setIdPreview(e.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      setIdPreview(null);
+    }
+
     try {
-      const extracted = await extractAadhaarData(file);
-      setAadhaarData(extracted);
-      setOrgAddress(extracted.address); // Auto-fill address
+      // Step 1: Upload file to MongoDB via backend
+      if (!currentUser) {
+        throw new Error("You must be logged in to upload files");
+      }
+
+      console.log('📤 Starting file upload to MongoDB...');
+      console.log('   File Name:', file.name);
+      console.log('   File Size:', file.size, 'bytes');
+      console.log('   User:', currentUser.uid);
+      
       toast({
-        title: "Extraction successful",
-        description: "Aadhaar details extracted successfully. Please verify and confirm.",
+        title: "📤 Uploading file...",
+        description: "Please wait while we upload your file to MongoDB.",
       });
+
+      // Upload file to backend (MongoDB)
+      let fileUrl: string;
+      
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("userId", currentUser.uid);
+
+        const uploadResponse = await axios.post(
+          getApiUrl('/api/upload-file'),
+          formData,
+          {
+            headers: {
+              "Content-Type": "multipart/form-data",
+            },
+            timeout: 60000, // 60 second timeout for upload
+          }
+        );
+
+        if (uploadResponse.data.success && uploadResponse.data.data) {
+          // Use the fileUrl from response (will be converted to full URL by backend)
+          fileUrl = uploadResponse.data.data.fileUrl;
+          console.log('✅ File uploaded to MongoDB successfully');
+          console.log('📄 File URL:', fileUrl);
+          console.log('🆔 File ID:', uploadResponse.data.data.fileId);
+        } else {
+          throw new Error(uploadResponse.data.message || "Failed to upload file");
+        }
+      } catch (uploadError: any) {
+        console.error('❌ MongoDB upload error:', uploadError);
+        console.error('   Error details:', {
+          message: uploadError.message,
+          response: uploadError.response?.data,
+        });
+        
+        throw new Error(
+          uploadError.response?.data?.message || 
+          uploadError.message || 
+          "Failed to upload file to MongoDB"
+        );
+      }
+
+      // Step 2: Send file URL to backend for extraction
+      toast({
+        title: "🔍 Extracting information...",
+        description: "Using AI to extract ID details. This may take 10-30 seconds.",
+      });
+
+      const response = await axios.post(
+        getApiUrl('/api/extract-id'),
+        {
+          fileUrl: fileUrl, // MongoDB file URL
+          fileName: file.name,
+          fileType: file.type,
+        },
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          timeout: 90000, // 90 second timeout for AI processing
+        }
+      );
+
+      if (response.data.success && response.data.data) {
+        setIdData(response.data.data);
+        toast({
+          title: "✅ Extraction successful",
+          description: "ID details extracted successfully. Please verify and confirm.",
+        });
+      } else {
+        throw new Error(response.data.message || "Failed to extract ID data");
+      }
     } catch (err: any) {
-      const errorMsg = err.message || "Failed to extract Aadhaar data";
+      console.error("ID extraction error:", err);
+      
+      // Provide user-friendly error messages
+      let errorMsg = "Failed to extract ID information";
+      
+      if (err.message?.includes('timeout')) {
+        errorMsg = "❌ Request timed out. Please try again with a smaller file.";
+      } else if (err.message?.includes('MongoDB')) {
+        errorMsg = "❌ Database error. Please check MongoDB connection.";
+      } else if (err.message?.includes('upload')) {
+        errorMsg = err.message;
+      } else {
+        errorMsg = err.response?.data?.message || err.message || errorMsg;
+      }
+
       setError(errorMsg);
       toast({
-        title: "Extraction failed",
+        title: "❌ Extraction failed",
         description: errorMsg + ". Please enter details manually.",
         variant: "destructive",
       });
-      // Still show the preview so user can manually enter
+
+      // Clear extracted data
+      setIdData({
+        name: "",
+        dob: "",
+        gender: "",
+        address: "",
+        id_number: "",
+        id_type: "",
+      });
     } finally {
-      setLoading(false);
+      setExtracting(false);
     }
   };
 
-  // Webcam functions
-  const startWebcam = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        setWebcamActive(true);
+  // Step 2: Camera functions
+  const isMobileDevice = () => {
+    return (
+      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+        navigator.userAgent
+      ) || (window.matchMedia && window.matchMedia("(max-width: 768px)").matches)
+    );
+  };
+
+  const openCamera = async () => {
+    const isMobile = isMobileDevice();
+
+    if (isMobile) {
+      if (cameraInputRef.current) {
+        cameraInputRef.current.click();
       }
-    } catch (err) {
-      setError("Failed to access camera. Please allow camera permissions.");
+    } else {
+      try {
+        setError("");
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+        });
+        streamRef.current = stream;
+        setCameraActive(true);
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        setError("Failed to access camera. Please allow camera permissions.");
+      }
     }
   };
 
-  const stopWebcam = () => {
+  const stopCamera = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
-    setWebcamActive(false);
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setCameraActive(false);
   };
 
   const capturePhoto = () => {
@@ -258,92 +324,92 @@ const RegisterNGO = () => {
     const ctx = canvas.getContext("2d");
     if (ctx) {
       ctx.drawImage(videoRef.current, 0, 0);
-      const dataUrl = canvas.toDataURL("image/png");
-      setProfilePhoto(dataUrl);
-      stopWebcam();
+      const dataUrl = canvas.toDataURL("image/jpeg");
+      setCapturedPhoto(dataUrl);
+      stopCamera();
+      setShowConfirmDialog(true);
     }
   };
 
-  // Validate logo with CLIP
-  const validateLogo = async (logoPreview: string, description: string) => {
-    if (!logoPreview || !description) {
-      setError("Please provide both logo and description for validation");
-      return;
-    }
+  const handleCameraCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-    if (description.length < 10) {
-      setError("Description is too short. Please provide more details for better validation.");
-      return;
-    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const imageData = e.target?.result as string;
+      setCapturedPhoto(imageData);
+      setShowConfirmDialog(true);
+    };
+    reader.readAsDataURL(file);
 
-    setLogoValidation({ isValid: false, confidence: 0, tags: [], validating: true });
+    if (cameraInputRef.current) {
+      cameraInputRef.current.value = "";
+    }
+  };
+
+  const confirmPhoto = async () => {
+    if (!capturedPhoto) return;
+
+    setShowConfirmDialog(false);
+    setFacePhoto(capturedPhoto);
+    setVerifying(true);
     setError("");
 
     try {
-      // Auto-tag NGO type
-      const tags = await autoTagNGOType(logoPreview, description);
-      
-      // Validate logo matches description domain
-      const domainTexts = tags.slice(0, 3).map((t) => t.tag);
-      if (domainTexts.length === 0) {
-        domainTexts.push("non-profit organization", "charity", "foundation");
-      }
+      const response = await axios.post(
+        getApiUrl('/api/verify-face'),
+        { image: capturedPhoto },
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
 
-      const validation = await validateImageDomain(logoPreview, domainTexts, 0.25);
-
-      setLogoValidation({
-        isValid: validation.isValid,
-        confidence: validation.confidence,
-        tags: tags,
-        validating: false,
-      });
-
-      if (!validation.isValid) {
+      if (response.data.success && response.data.status === "Verified") {
+        setFaceVerified(true);
         toast({
-          title: "Logo validation",
-          description: `Logo may not align with organization type. Confidence: ${(validation.confidence * 100).toFixed(1)}%`,
-          variant: "default",
+          title: "✅ Face verified",
+          description: "Your face has been verified successfully.",
         });
       } else {
+        setFaceVerified(false);
+        setFacePhoto(null);
         toast({
-          title: "Validation successful",
-          description: `Logo matches organization type with ${(validation.confidence * 100).toFixed(1)}% confidence`,
+          title: "❌ Verification failed",
+          description: "Face verification failed. Please retake the photo.",
+          variant: "destructive",
         });
       }
     } catch (err: any) {
-      console.error("Logo validation error:", err);
-      
-      const errorMessage = err.message || "Failed to validate logo with CLIP";
-      
-      setLogoValidation({
-        isValid: false,
-        confidence: 0,
-        tags: [],
-        validating: false,
+      console.error("Face verification error:", err);
+      const errorMsg = err.response?.data?.message || err.message || "Failed to verify face";
+      setError(errorMsg);
+      setFaceVerified(false);
+      setFacePhoto(null);
+      toast({
+        title: "❌ Verification failed",
+        description: errorMsg,
+        variant: "destructive",
       });
-
-      // Show detailed error message
-      if (errorMessage.includes('connect') || errorMessage.includes('backend')) {
-        setError(`CLIP API is not available. ${errorMessage}. Please start the CLIP backend server.`);
-        toast({
-          title: "CLIP API unavailable",
-          description: "Using simulated validation. Start the backend server for real CLIP analysis.",
-          variant: "destructive",
-        });
-      } else {
-        setError(errorMessage);
-        toast({
-          title: "Validation failed",
-          description: errorMessage,
-          variant: "destructive",
-        });
-      }
+    } finally {
+      setVerifying(false);
+      setCapturedPhoto(null);
     }
   };
 
-  // Add funding condition
-  const addCondition = async () => {
-    if (!newCondition.title || !newCondition.description || !newCondition.estimatedFund) {
+  const retakePhoto = () => {
+    setShowConfirmDialog(false);
+    setCapturedPhoto(null);
+    setFacePhoto(null);
+    setFaceVerified(false);
+    openCamera();
+  };
+
+  // Step 3: Add funding condition
+  const addCondition = () => {
+    if (!newCondition.title || !newCondition.description || !newCondition.fund_estimate) {
       setError("Please fill all condition fields");
       return;
     }
@@ -352,22 +418,15 @@ const RegisterNGO = () => {
       id: Date.now().toString(),
       title: newCondition.title || "",
       description: newCondition.description || "",
-      estimatedFund: newCondition.estimatedFund || "",
+      fund_estimate: newCondition.fund_estimate || "",
       priority: (newCondition.priority as "High" | "Medium" | "Low") || "Medium",
-    };
-
-    // Validate condition description (optional - can be done later with proof images)
-    // For now, we'll mark it as pending validation
-    condition.validationResult = {
-      isValid: true, // Default to true, will be validated when proof images are added
-      confidence: 0,
     };
 
     setConditions([...conditions, condition]);
     setNewCondition({
       title: "",
       description: "",
-      estimatedFund: "",
+      fund_estimate: "",
       priority: "Medium",
     });
     setError("");
@@ -377,46 +436,6 @@ const RegisterNGO = () => {
     setConditions(conditions.filter((c) => c.id !== id));
   };
 
-  // Generate invite link
-  const generateInviteLink = () => {
-    const link = `${window.location.origin}/invite/ngo/${currentUser?.uid}/${Date.now()}`;
-    setInviteLink(link);
-    toast({
-      title: "Invite link generated",
-      description: "Link copied to clipboard",
-    });
-    navigator.clipboard.writeText(link);
-  };
-
-  const addMember = (email: string) => {
-    const member: InvitedMember = {
-      id: Date.now().toString(),
-      email,
-      status: "pending",
-    };
-    setMembers([...members, member]);
-  };
-
-  const removeMember = (id: string) => {
-    setMembers(members.filter((m) => m.id !== id));
-  };
-
-  // Upload file to Firebase Storage
-  const uploadFile = async (file: File, path: string): Promise<string> => {
-    const storageRef = ref(storage, path);
-    await uploadBytes(storageRef, file);
-    return await getDownloadURL(storageRef);
-  };
-
-  // Upload base64 image to Firebase Storage
-  const uploadBase64Image = async (base64: string, path: string): Promise<string> => {
-    const response = await fetch(base64);
-    const blob = await response.blob();
-    const storageRef = ref(storage, path);
-    await uploadBytes(storageRef, blob);
-    return await getDownloadURL(storageRef);
-  };
-
   // Submit registration
   const handleSubmit = async () => {
     if (!currentUser) {
@@ -424,13 +443,13 @@ const RegisterNGO = () => {
       return;
     }
 
-    if (!aadhaarConfirmed || !profilePhotoConfirmed) {
-      setError("Please complete owner verification");
+    if (!idConfirmed || !faceVerified) {
+      setError("Please complete ID verification and face verification");
       return;
     }
 
-    if (!orgName || !orgDescription || !orgEmail || !orgPhone) {
-      setError("Please fill all organization fields");
+    if (!ngoName || !ngoDescription || !donationCategory) {
+      setError("Please fill all required NGO fields");
       return;
     }
 
@@ -443,79 +462,69 @@ const RegisterNGO = () => {
     setError("");
 
     try {
-      // Upload all images
-      const uploadPromises: Promise<string>[] = [];
-
-      // Aadhaar card
-      if (aadhaarFile) {
-        uploadPromises.push(
-          uploadFile(aadhaarFile, `organizations/${currentUser.uid}/aadhaar/${Date.now()}`)
-        );
+      // Upload profile photo if exists
+      let profilePhotoUrl = "";
+      if (facePhoto) {
+        // In production, upload to Firebase Storage first
+        // For now, we'll use base64 or upload URL
+        profilePhotoUrl = facePhoto;
       }
 
-      // Profile photo
-      if (profilePhoto) {
-        uploadPromises.push(
-          uploadBase64Image(
-            profilePhoto,
-            `organizations/${currentUser.uid}/profile/${Date.now()}.png`
-          )
-        );
+      const response = await axios.post(
+        getApiUrl('/api/register-ngo'),
+        {
+          uid: currentUser.uid,
+          profile: {
+            name: idData.name,
+            dob: idData.dob,
+            gender: idData.gender,
+            address: idData.address,
+            id_number: idData.id_number,
+            id_type: idData.id_type,
+          },
+          details: {
+            ngo_name: ngoName,
+            description: ngoDescription,
+            donation_category: donationCategory,
+            contact_email: contactEmail || currentUser.email || "",
+            contact_phone: contactPhone,
+          },
+          conditions: conditions.map((c) => ({
+            title: c.title,
+            description: c.description,
+            fund_estimate: parseFloat(c.fund_estimate) || 0,
+            priority: c.priority,
+          })),
+          profilePhotoUrl,
+        },
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      if (response.data.success) {
+        toast({
+          title: "🎉 Registration successful!",
+          description: "Your NGO registration is pending verification.",
+        });
+
+        setTimeout(() => {
+          navigate("/");
+        }, 2000);
+      } else {
+        throw new Error(response.data.message || "Failed to register NGO");
       }
-
-      // Logo
-      if (orgLogo) {
-        uploadPromises.push(
-          uploadFile(orgLogo, `organizations/${currentUser.uid}/logo/${Date.now()}`)
-        );
-      }
-
-      const [aadhaarUrl, profilePhotoUrl, logoUrl] = await Promise.all(uploadPromises);
-
-      // Prepare Firestore document
-      const orgData = {
-        owner_uid: currentUser.uid,
-        owner_email: currentUser.email,
-        organization_name: orgName,
-        description: orgDescription,
-        contact_email: orgEmail,
-        contact_number: orgPhone,
-        address: orgAddress,
-        aadhaar_verified: false, // Will be verified later by admin/AI
-        aadhaar_url: aadhaarUrl || "",
-        profile_photo_url: profilePhotoUrl || "",
-        logo_url: logoUrl || "",
-        conditions: conditions.map((c) => ({
-          title: c.title,
-          description: c.description,
-          estimated_fund: parseFloat(c.estimatedFund) || 0,
-          priority: c.priority,
-        })),
-        members: members.map((m) => ({
-          email: m.email,
-          status: m.status,
-        })),
-        status: "pending_verification",
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-
-      // Save to Firestore
-      const docRef = await addDoc(collection(db, "organizations"), orgData);
-
-      setSubmitted(true);
-      toast({
-        title: "Registration successful!",
-        description: "Your NGO registration is pending verification.",
-      });
-
-      // Navigate to success page or home after 3 seconds
-      setTimeout(() => {
-        navigate("/");
-      }, 3000);
     } catch (err: any) {
       console.error("Registration error:", err);
-      setError(err.message || "Failed to submit registration. Please try again.");
+      const errorMsg = err.response?.data?.message || err.message || "Failed to register NGO";
+      setError(errorMsg);
+      toast({
+        title: "❌ Registration failed",
+        description: errorMsg,
+        variant: "destructive",
+      });
     } finally {
       setLoading(false);
     }
@@ -523,7 +532,15 @@ const RegisterNGO = () => {
 
   // Navigation
   const nextStep = () => {
-    if (currentStep < 5) {
+    if (currentStep === 1 && !idConfirmed) {
+      setError("Please confirm your ID information");
+      return;
+    }
+    if (currentStep === 2 && !faceVerified) {
+      setError("Please complete face verification");
+      return;
+    }
+    if (currentStep < 3) {
       setCurrentStep(currentStep + 1);
       setError("");
     }
@@ -538,49 +555,18 @@ const RegisterNGO = () => {
 
   useEffect(() => {
     return () => {
-      stopWebcam();
+      stopCamera();
     };
   }, []);
-
-  // Success screen
-  if (submitted) {
-    return (
-      <div className="min-h-screen flex flex-col bg-white">
-        <Navbar />
-        <div className="flex-1 flex items-center justify-center p-4">
-          <Card className="w-full max-w-md shadow-lg">
-            <CardHeader className="text-center">
-              <div className="mx-auto mb-4 w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
-                <CheckCircle2 className="w-10 h-10 text-green-600" />
-              </div>
-              <CardTitle className="text-2xl">Registration Submitted!</CardTitle>
-              <CardDescription>
-                Your NGO registration has been submitted successfully and is pending verification.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="text-center">
-              <p className="text-sm text-muted-foreground mb-4">
-                You will receive an email once your registration is verified.
-              </p>
-              <Button onClick={() => navigate("/")} className="w-full">
-                Go to Home
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-        <Footer />
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen flex flex-col bg-white">
       <Navbar />
       <div className="flex-1 container mx-auto px-4 py-8 max-w-4xl">
-        {/* Stepper */}
+        {/* Step Indicator */}
         <div className="mb-8">
           <div className="flex items-center justify-between">
-            {[1, 2, 3, 4, 5].map((step) => (
+            {[1, 2, 3].map((step) => (
               <div key={step} className="flex items-center flex-1">
                 <div
                   className={`flex items-center justify-center w-10 h-10 rounded-full border-2 ${
@@ -591,7 +577,7 @@ const RegisterNGO = () => {
                 >
                   {currentStep > step ? <Check className="w-5 h-5" /> : step}
                 </div>
-                {step < 5 && (
+                {step < 3 && (
                   <div
                     className={`flex-1 h-1 mx-2 ${
                       currentStep > step ? "bg-black" : "bg-gray-300"
@@ -602,90 +588,63 @@ const RegisterNGO = () => {
             ))}
           </div>
           <div className="flex justify-between mt-2 text-xs text-gray-600">
-            <span>Owner</span>
-            <span>Organization</span>
-            <span>Conditions</span>
-            <span>Members</span>
-            <span>Review</span>
+            <span>ID Upload</span>
+            <span>Face Verify</span>
+            <span>NGO Details</span>
           </div>
         </div>
 
         <Card className="shadow-lg">
           <CardHeader>
             <CardTitle className="text-2xl">
-              Step {currentStep} of 5:{" "}
-              {currentStep === 1 && "Owner Verification"}
-              {currentStep === 2 && "Organization Information"}
-              {currentStep === 3 && "Funding Conditions"}
-              {currentStep === 4 && "Community Members"}
-              {currentStep === 5 && "Final Review"}
+              Step {currentStep} of 3:{" "}
+              {currentStep === 1 && "Upload ID Card"}
+              {currentStep === 2 && "Face Verification"}
+              {currentStep === 3 && "NGO Details"}
             </CardTitle>
             <CardDescription>
-              {currentStep === 1 && "Verify your identity using Aadhaar card"}
-              {currentStep === 2 && "Tell us about your organization"}
-              {currentStep === 3 && "Define funding conditions for your campaigns"}
-              {currentStep === 4 && "Invite team members to your organization"}
-              {currentStep === 5 && "Review and submit your registration"}
+              {currentStep === 1 && "Upload your Aadhaar or PAN card for verification"}
+              {currentStep === 2 && "Capture a live photo for face verification"}
+              {currentStep === 3 && "Enter your NGO details and funding conditions"}
             </CardDescription>
           </CardHeader>
 
           <CardContent className="space-y-6">
             {error && (
-              <Alert variant={error.includes("CLIP API") || error.includes("Docext") ? "default" : "destructive"}>
-                <AlertDescription className="space-y-2">
-                  <p>{error}</p>
-                  {error.includes("CLIP API") && (
-                    <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded text-xs">
-                      <p className="font-semibold mb-1">To enable real CLIP validation:</p>
-                      <ol className="list-decimal list-inside space-y-1 text-gray-700">
-                        <li>Open a new terminal</li>
-                        <li>Navigate to: <code className="bg-gray-100 px-1 rounded">D:\dowl\conditional_answer\CLIP-main</code></li>
-                        <li>Run: <code className="bg-gray-100 px-1 rounded">python clip_api_server.py</code></li>
-                        <li>Wait for "CLIP model loaded successfully!" message</li>
-                        <li>Keep that terminal open and try again</li>
-                      </ol>
-                    </div>
-                  )}
-                  {error.includes("Docext") && (
-                    <div className="mt-2 p-3 bg-purple-50 border border-purple-200 rounded text-xs">
-                      <p className="font-semibold mb-1">To enable Aadhaar extraction with docext:</p>
-                      <ol className="list-decimal list-inside space-y-1 text-gray-700">
-                        <li>Open a new terminal</li>
-                        <li>Navigate to: <code className="bg-gray-100 px-1 rounded">D:\dowl\photo_ver_model\docext-main</code></li>
-                        <li>Run: <code className="bg-gray-100 px-1 rounded">python -m docext.app.app</code></li>
-                        <li>Wait for server to start (first time may download model)</li>
-                        <li>Start API server: <code className="bg-gray-100 px-1 rounded">python docext_api_server.py</code></li>
-                        <li>Keep both terminals open and try again</li>
-                      </ol>
-                    </div>
-                  )}
-                </AlertDescription>
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}
 
-            {/* Step 1: Owner Verification */}
+            {/* Step 1: ID Upload */}
             {currentStep === 1 && (
               <div className="space-y-6">
-                {/* Aadhaar Upload */}
                 <div>
                   <Label className="text-base font-semibold mb-2 block">
-                    Upload Aadhaar Card
+                    Upload Aadhaar or PAN Card
                   </Label>
                   <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
-                    {aadhaarPreview ? (
+                    {idPreview ? (
                       <div className="space-y-4">
                         <img
-                          src={aadhaarPreview}
-                          alt="Aadhaar preview"
+                          src={idPreview}
+                          alt="ID preview"
                           className="max-w-full h-64 mx-auto rounded-lg shadow-sm"
                         />
                         <Button
                           variant="outline"
                           onClick={() => {
-                            setAadhaarFile(null);
-                            setAadhaarPreview(null);
-                            setAadhaarData(null);
-                            setAadhaarConfirmed(false);
+                            setIdFile(null);
+                            setIdPreview(null);
+                            setIdData({
+                              name: "",
+                              dob: "",
+                              gender: "",
+                              address: "",
+                              id_number: "",
+                              id_type: "",
+                            });
+                            setIdConfirmed(false);
                           }}
                         >
                           <X className="mr-2 h-4 w-4" />
@@ -695,19 +654,20 @@ const RegisterNGO = () => {
                     ) : (
                       <div>
                         <Upload className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-                        <Label htmlFor="aadhaar-upload" className="cursor-pointer">
+                        <Label htmlFor="id-upload" className="cursor-pointer">
                           <Button variant="outline" asChild>
                             <span>
                               <Upload className="mr-2 h-4 w-4" />
-                              Choose Aadhaar Image
+                              Choose ID File (JPG/PNG/PDF)
                             </span>
                           </Button>
                         </Label>
                         <Input
-                          id="aadhaar-upload"
+                          id="id-upload"
+                          ref={fileInputRef}
                           type="file"
-                          accept="image/*"
-                          onChange={handleAadhaarUpload}
+                          accept="image/*,.pdf"
+                          onChange={handleIdUpload}
                           className="hidden"
                         />
                       </div>
@@ -715,15 +675,15 @@ const RegisterNGO = () => {
                   </div>
                 </div>
 
-                {/* Loading State */}
-                {loading && aadhaarFile && (
+                {/* Extracting */}
+                {extracting && (
                   <div className="border border-gray-200 rounded-lg p-4 space-y-3">
                     <div className="flex items-center gap-3">
-                      <Loader2 className="w-5 h-5 animate-spin text-accent" />
+                      <Loader2 className="w-5 h-5 animate-spin text-black" />
                       <div>
                         <h3 className="font-semibold">Extracting Information...</h3>
                         <p className="text-xs text-gray-500">
-                          Analyzing Aadhaar card with docext AI. This may take 10-30 seconds.
+                          Analyzing ID document with AI. This may take 10-30 seconds.
                         </p>
                       </div>
                     </div>
@@ -731,73 +691,119 @@ const RegisterNGO = () => {
                 )}
 
                 {/* Extracted Data */}
-                {aadhaarData && !aadhaarConfirmed && !loading && (
-                  <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+                {idData.name && !extracting && (
+                  <div className="border border-gray-200 rounded-lg p-4 space-y-4">
                     <div className="flex items-center gap-2 mb-2">
                       <CheckCircle2 className="w-5 h-5 text-green-600" />
                       <h3 className="font-semibold">Extracted Information</h3>
                     </div>
-                    <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <span className="text-gray-600">Name:</span>
-                        <p className="font-medium">{aadhaarData.name || "Not found"}</p>
+                        <Label>Full Name</Label>
+                        <Input
+                          value={idData.name}
+                          onChange={(e) =>
+                            setIdData({ ...idData, name: e.target.value })
+                          }
+                          placeholder="Enter full name"
+                        />
                       </div>
                       <div>
-                        <span className="text-gray-600">DOB:</span>
-                        <p className="font-medium">{aadhaarData.dob || "Not found"}</p>
+                        <Label>Date of Birth (DD-MM-YYYY)</Label>
+                        <Input
+                          value={idData.dob}
+                          onChange={(e) => setIdData({ ...idData, dob: e.target.value })}
+                          placeholder="DD-MM-YYYY"
+                        />
                       </div>
                       <div>
-                        <span className="text-gray-600">Gender:</span>
-                        <p className="font-medium">{aadhaarData.gender || "Not found"}</p>
+                        <Label>Gender</Label>
+                        <Select
+                          value={idData.gender}
+                          onValueChange={(value) =>
+                            setIdData({ ...idData, gender: value })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select gender" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Male">Male</SelectItem>
+                            <SelectItem value="Female">Female</SelectItem>
+                            <SelectItem value="Transgender">Transgender</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
                       <div>
-                        <span className="text-gray-600">Mobile:</span>
-                        <p className="font-medium">{aadhaarData.mobile || "Not found"}</p>
+                        <Label>ID Number</Label>
+                        <Input
+                          value={idData.id_number}
+                          onChange={(e) =>
+                            setIdData({ ...idData, id_number: e.target.value })
+                          }
+                          placeholder="ID number"
+                        />
                       </div>
                       <div className="col-span-2">
-                        <span className="text-gray-600">Address:</span>
-                        <p className="font-medium">{aadhaarData.address || "Not found"}</p>
+                        <Label>Full Address</Label>
+                        <Textarea
+                          value={idData.address}
+                          onChange={(e) =>
+                            setIdData({ ...idData, address: e.target.value })
+                          }
+                          placeholder="Enter complete address"
+                          rows={3}
+                        />
                       </div>
                     </div>
-                    {(!aadhaarData.name || !aadhaarData.dob || !aadhaarData.address) && (
-                      <Alert variant="default" className="mt-3">
-                        <AlertDescription className="text-xs">
-                          Some fields were not extracted. Please review and enter missing information manually.
-                        </AlertDescription>
-                      </Alert>
-                    )}
                     <div className="flex items-center space-x-2 pt-2">
                       <Checkbox
-                        id="confirm-aadhaar"
-                        checked={aadhaarConfirmed}
-                        onCheckedChange={(checked) =>
-                          setAadhaarConfirmed(checked as boolean)
-                        }
+                        id="confirm-id"
+                        checked={idConfirmed}
+                        onCheckedChange={(checked) => setIdConfirmed(checked as boolean)}
                       />
-                      <Label htmlFor="confirm-aadhaar" className="cursor-pointer">
+                      <Label htmlFor="confirm-id" className="cursor-pointer">
                         Confirm this information is correct
                       </Label>
                     </div>
-                    <div className="pt-2 border-t">
-                      <p className="text-xs text-gray-500">
-                        ⚠️ AI deepfake verification will be performed later
-                      </p>
-                    </div>
                   </div>
                 )}
+              </div>
+            )}
 
-                {/* Selfie Capture */}
+            {/* Step 2: Face Verification */}
+            {currentStep === 2 && (
+              <div className="space-y-6">
                 <div>
                   <Label className="text-base font-semibold mb-2 block">
-                    Capture Profile Photo
+                    Capture Live Photo
                   </Label>
-                  {!profilePhoto ? (
+
+                  <Input
+                    ref={cameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="user"
+                    onChange={handleCameraCapture}
+                    className="hidden"
+                  />
+
+                  {!facePhoto ? (
                     <div className="space-y-4">
-                      {!webcamActive ? (
-                        <Button onClick={startWebcam} variant="outline" className="w-full">
-                          <Camera className="mr-2 h-4 w-4" />
-                          Start Camera
-                        </Button>
+                      {!cameraActive ? (
+                        <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
+                          <Camera className="w-16 h-16 mx-auto mb-4 text-gray-400" />
+                          <p className="text-sm text-gray-600 mb-4">
+                            Click below to open your camera and capture a photo
+                          </p>
+                          <Button onClick={openCamera} variant="outline" className="w-full">
+                            <Camera className="mr-2 h-4 w-4" />
+                            Open Camera
+                          </Button>
+                          <p className="text-xs text-gray-500 mt-3">
+                            This will open your device camera directly
+                          </p>
+                        </div>
                       ) : (
                         <div className="space-y-4">
                           <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -813,271 +819,142 @@ const RegisterNGO = () => {
                               <Camera className="mr-2 h-4 w-4" />
                               Capture Photo
                             </Button>
-                            <Button onClick={stopWebcam} variant="outline">
+                            <Button onClick={stopCamera} variant="outline">
                               Cancel
                             </Button>
                           </div>
                         </div>
                       )}
-                      <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center">
-                        <p className="text-sm text-gray-500">
-                          Or upload a photo file
-                        </p>
-                        <Input
-                          type="file"
-                          accept="image/*"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) {
-                              const reader = new FileReader();
-                              reader.onload = (e) => {
-                                setProfilePhoto(e.target?.result as string);
-                              };
-                              reader.readAsDataURL(file);
-                            }
-                          }}
-                          className="mt-2"
-                        />
-                      </div>
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      <img
-                        src={profilePhoto}
-                        alt="Profile"
-                        className="w-48 h-48 mx-auto rounded-lg shadow-sm object-cover"
-                      />
-                      <div className="flex items-center justify-center space-x-2">
-                        <Checkbox
-                          id="confirm-photo"
-                          checked={profilePhotoConfirmed}
-                          onCheckedChange={(checked) =>
-                            setProfilePhotoConfirmed(checked as boolean)
-                          }
-                        />
-                        <Label htmlFor="confirm-photo" className="cursor-pointer">
-                          Confirm this as my profile photo
-                        </Label>
-                      </div>
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          setProfilePhoto(null);
-                          setProfilePhotoConfirmed(false);
-                        }}
-                        className="w-full"
-                      >
-                        <X className="mr-2 h-4 w-4" />
-                        Retake Photo
-                      </Button>
+                      {verifying && (
+                        <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+                          <div className="flex items-center gap-3">
+                            <Loader2 className="w-5 h-5 animate-spin text-black" />
+                            <div>
+                              <h3 className="font-semibold">Verifying Face...</h3>
+                              <p className="text-xs text-gray-500">
+                                Analyzing photo with AI. This may take 5-10 seconds.
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {faceVerified && !verifying && (
+                        <div className="border border-green-200 rounded-lg p-4 bg-green-50">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="w-5 h-5 text-green-600" />
+                            <h3 className="font-semibold text-green-800">Face Verified</h3>
+                          </div>
+                          <p className="text-sm text-green-700 mt-1">
+                            Your face has been verified successfully.
+                          </p>
+                        </div>
+                      )}
+
+                      {!faceVerified && !verifying && facePhoto && (
+                        <div className="space-y-4">
+                          <img
+                            src={facePhoto}
+                            alt="Profile"
+                            className="w-48 h-48 mx-auto rounded-lg shadow-sm object-cover"
+                          />
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              setFacePhoto(null);
+                              setFaceVerified(false);
+                              openCamera();
+                            }}
+                            className="w-full"
+                          >
+                            <X className="mr-2 h-4 w-4" />
+                            Retake Photo
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
               </div>
             )}
 
-            {/* Step 2: Organization Information */}
-            {currentStep === 2 && (
+            {/* Step 3: NGO Details */}
+            {currentStep === 3 && (
               <div className="space-y-6">
                 <div>
-                  <Label htmlFor="org-name">Organization Name *</Label>
+                  <Label htmlFor="ngo-name">NGO Name *</Label>
                   <Input
-                    id="org-name"
-                    value={orgName}
-                    onChange={(e) => setOrgName(e.target.value)}
+                    id="ngo-name"
+                    value={ngoName}
+                    onChange={(e) => setNgoName(e.target.value)}
                     placeholder="e.g., Education For All Foundation"
                   />
                 </div>
                 <div>
-                  <Label htmlFor="org-desc">Description / Purpose *</Label>
+                  <Label htmlFor="ngo-desc">Description / Purpose *</Label>
                   <Textarea
-                    id="org-desc"
-                    value={orgDescription}
-                    onChange={async (e) => {
-                      setOrgDescription(e.target.value);
-                      // Auto-validate logo when description changes
-                      if (orgLogoPreview && e.target.value.length > 20) {
-                        setTimeout(() => {
-                          validateLogo(orgLogoPreview, e.target.value);
-                        }, 1000);
-                      }
-                    }}
+                    id="ngo-desc"
+                    value={ngoDescription}
+                    onChange={(e) => setNgoDescription(e.target.value)}
                     placeholder="Describe your organization's mission and goals..."
                     rows={4}
                   />
                 </div>
+                <div>
+                  <Label htmlFor="donation-category">Donation Category *</Label>
+                  <Select value={donationCategory} onValueChange={setDonationCategory}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select category" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Education">Education</SelectItem>
+                      <SelectItem value="Healthcare">Healthcare</SelectItem>
+                      <SelectItem value="Disaster Relief">Disaster Relief</SelectItem>
+                      <SelectItem value="Environment">Environment</SelectItem>
+                      <SelectItem value="Poverty Alleviation">Poverty Alleviation</SelectItem>
+                      <SelectItem value="Women Empowerment">Women Empowerment</SelectItem>
+                      <SelectItem value="Children Welfare">Children Welfare</SelectItem>
+                      <SelectItem value="Other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <Label htmlFor="org-email">Contact Email *</Label>
+                    <Label htmlFor="contact-email">Contact Email</Label>
                     <Input
-                      id="org-email"
+                      id="contact-email"
                       type="email"
-                      value={orgEmail}
-                      onChange={(e) => setOrgEmail(e.target.value)}
-                      placeholder="contact@ngo.org"
+                      value={contactEmail}
+                      onChange={(e) => setContactEmail(e.target.value)}
+                      placeholder={currentUser?.email || "contact@ngo.org"}
                     />
                   </div>
                   <div>
-                    <Label htmlFor="org-phone">Contact Number *</Label>
+                    <Label htmlFor="contact-phone">Contact Number</Label>
                     <Input
-                      id="org-phone"
+                      id="contact-phone"
                       type="tel"
-                      value={orgPhone}
-                      onChange={(e) => setOrgPhone(e.target.value)}
+                      value={contactPhone}
+                      onChange={(e) => setContactPhone(e.target.value)}
                       placeholder="+91 9876543210"
                     />
                   </div>
                 </div>
-                <div>
-                  <Label htmlFor="org-address">Address</Label>
-                  <Textarea
-                    id="org-address"
-                    value={orgAddress}
-                    onChange={(e) => setOrgAddress(e.target.value)}
-                    placeholder="Organization address"
-                    rows={2}
-                  />
-                </div>
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <Label>Organization Logo (Optional)</Label>
-                    {orgLogoPreview && orgDescription && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => validateLogo(orgLogoPreview, orgDescription)}
-                        disabled={logoValidation?.validating}
-                      >
-                        <Sparkles className="mr-2 h-4 w-4" />
-                        {logoValidation?.validating ? "Validating..." : "Validate with AI"}
-                      </Button>
-                    )}
-                  </div>
-                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
-                    {orgLogoPreview ? (
-                      <div className="space-y-4">
-                        <img
-                          src={orgLogoPreview}
-                          alt="Logo preview"
-                          className="w-32 h-32 mx-auto rounded-lg object-contain"
-                        />
-                        
-                        {/* CLIP Validation Results */}
-                        {logoValidation && !logoValidation.validating && (
-                          <div className={`p-3 rounded-lg border ${
-                            logoValidation.isValid 
-                              ? "bg-green-50 border-green-200" 
-                              : "bg-yellow-50 border-yellow-200"
-                          }`}>
-                            <div className="flex items-start gap-2 mb-2">
-                              {logoValidation.isValid ? (
-                                <CheckCircle2 className="w-5 h-5 text-green-600 mt-0.5" />
-                              ) : (
-                                <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5" />
-                              )}
-                              <div className="flex-1 text-left">
-                                <p className="text-sm font-medium">
-                                  {logoValidation.isValid 
-                                    ? "Logo matches organization type" 
-                                    : "Logo may not align with description"}
-                                </p>
-                                <p className="text-xs text-gray-600 mt-1">
-                                  Confidence: {(logoValidation.confidence * 100).toFixed(1)}%
-                                </p>
-                                {logoValidation.tags.length > 0 && (
-                                  <div className="mt-2 flex flex-wrap gap-1">
-                                    {logoValidation.tags.slice(0, 3).map((tag, idx) => (
-                                      <span
-                                        key={idx}
-                                        className="text-xs px-2 py-1 bg-gray-100 rounded-full"
-                                      >
-                                        {tag.tag} ({(tag.confidence * 100).toFixed(0)}%)
-                                      </span>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        )}
 
-                        {logoValidation?.validating && (
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-center gap-2 text-sm text-gray-600">
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                              Analyzing logo with CLIP AI...
-                            </div>
-                            <p className="text-xs text-center text-gray-500">
-                              This may take a few seconds. Processing image features...
-                            </p>
-                          </div>
-                        )}
-
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            setOrgLogo(null);
-                            setOrgLogoPreview(null);
-                            setLogoValidation(null);
-                          }}
-                        >
-                          <X className="mr-2 h-4 w-4" />
-                          Remove
-                        </Button>
-                      </div>
-                    ) : (
-                      <div>
-                        <FileText className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-                        <Label htmlFor="logo-upload" className="cursor-pointer">
-                          <Button variant="outline" asChild>
-                            <span>
-                              <Upload className="mr-2 h-4 w-4" />
-                              Upload Logo
-                            </span>
-                          </Button>
-                        </Label>
-                        <Input
-                          id="logo-upload"
-                          type="file"
-                          accept="image/*"
-                          onChange={async (e) => {
-                            const file = e.target.files?.[0];
-                            if (file) {
-                              setOrgLogo(file);
-                              const reader = new FileReader();
-                              reader.onload = async (e) => {
-                                const preview = e.target?.result as string;
-                                setOrgLogoPreview(preview);
-                                // Validate logo with CLIP if description exists
-                                if (orgDescription) {
-                                  await validateLogo(preview, orgDescription);
-                                }
-                              };
-                              reader.readAsDataURL(file);
-                            }
-                          }}
-                          className="hidden"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Step 3: Funding Conditions */}
-            {currentStep === 3 && (
-              <div className="space-y-6">
+                {/* Funding Conditions */}
                 <div className="border border-gray-200 rounded-lg p-4 space-y-4">
-                  <h3 className="font-semibold">Add New Condition</h3>
+                  <h3 className="font-semibold">Add Funding Condition</h3>
                   <div>
-                    <Label>Title *</Label>
+                    <Label>Condition Title *</Label>
                     <Input
                       value={newCondition.title}
                       onChange={(e) =>
                         setNewCondition({ ...newCondition, title: e.target.value })
                       }
-                      placeholder="e.g., School Supplies"
+                      placeholder="e.g., Food for Flood Survivors"
                     />
                   </div>
                   <div>
@@ -1093,12 +970,12 @@ const RegisterNGO = () => {
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <Label>Estimated Fund Requirement (₹) *</Label>
+                      <Label>Estimated Fund (₹) *</Label>
                       <Input
                         type="number"
-                        value={newCondition.estimatedFund}
+                        value={newCondition.fund_estimate}
                         onChange={(e) =>
-                          setNewCondition({ ...newCondition, estimatedFund: e.target.value })
+                          setNewCondition({ ...newCondition, fund_estimate: e.target.value })
                         }
                         placeholder="50000"
                       />
@@ -1149,27 +1026,9 @@ const RegisterNGO = () => {
                               >
                                 {condition.priority}
                               </span>
-                              {condition.validationResult && (
-                                <span
-                                  className={`text-xs px-2 py-1 rounded flex items-center gap-1 ${
-                                    condition.validationResult.isValid
-                                      ? "bg-green-100 text-green-700"
-                                      : "bg-gray-100 text-gray-600"
-                                  }`}
-                                  title="AI validation status"
-                                >
-                                  <ImageIcon className="w-3 h-3" />
-                                  {condition.validationResult.isValid
-                                    ? "Validated"
-                                    : "Pending"}
-                                </span>
-                              )}
                             </div>
                             <p className="text-sm text-gray-600 mb-2">{condition.description}</p>
-                            <p className="text-sm font-medium">₹{condition.estimatedFund}</p>
-                            <p className="text-xs text-gray-500 mt-1">
-                              💡 Upload proof images later to validate with CLIP AI
-                            </p>
+                            <p className="text-sm font-medium">₹{condition.fund_estimate}</p>
                           </div>
                           <Button
                             variant="ghost"
@@ -1185,183 +1044,6 @@ const RegisterNGO = () => {
                 )}
               </div>
             )}
-
-            {/* Step 4: Members */}
-            {currentStep === 4 && (
-              <div className="space-y-6">
-                <div className="border border-gray-200 rounded-lg p-4 space-y-4">
-                  <h3 className="font-semibold">Invite Community Members</h3>
-                  <div>
-                    <Label>Member Email</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        type="email"
-                        placeholder="member@example.com"
-                        onKeyPress={(e) => {
-                          if (e.key === "Enter") {
-                            const input = e.target as HTMLInputElement;
-                            if (input.value) {
-                              addMember(input.value);
-                              input.value = "";
-                            }
-                          }
-                        }}
-                      />
-                      <Button
-                        onClick={(e) => {
-                          const input = (e.target as HTMLElement)
-                            .previousElementSibling as HTMLInputElement;
-                          if (input?.value) {
-                            addMember(input.value);
-                            input.value = "";
-                          }
-                        }}
-                      >
-                        <UserPlus className="mr-2 h-4 w-4" />
-                        Add
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="pt-2 border-t">
-                    <Button
-                      variant="outline"
-                      onClick={generateInviteLink}
-                      className="w-full"
-                    >
-                      <Copy className="mr-2 h-4 w-4" />
-                      Generate Invite Link
-                    </Button>
-                    {inviteLink && (
-                      <div className="mt-2 p-2 bg-gray-50 rounded text-xs break-all">
-                        {inviteLink}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Members List */}
-                {members.length > 0 && (
-                  <div className="space-y-3">
-                    <h3 className="font-semibold">Invited Members ({members.length})</h3>
-                    {members.map((member) => (
-                      <Card key={member.id} className="p-4">
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <p className="font-medium">{member.email}</p>
-                            <p className="text-xs text-gray-500 capitalize">{member.status}</p>
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => removeMember(member.id)}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </Card>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Step 5: Final Review */}
-            {currentStep === 5 && (
-              <div className="space-y-6">
-                <div className="border border-gray-200 rounded-lg p-4 space-y-4">
-                  <h3 className="font-semibold text-lg">Owner Information</h3>
-                  {aadhaarData && (
-                    <div className="grid grid-cols-2 gap-3 text-sm">
-                      <div>
-                        <span className="text-gray-600">Name:</span>
-                        <p className="font-medium">{aadhaarData.name}</p>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Mobile:</span>
-                        <p className="font-medium">{aadhaarData.mobile}</p>
-                      </div>
-                    </div>
-                  )}
-                  {profilePhoto && (
-                    <div>
-                      <span className="text-gray-600 text-sm">Profile Photo:</span>
-                      <img
-                        src={profilePhoto}
-                        alt="Profile"
-                        className="w-24 h-24 rounded-lg mt-2 object-cover"
-                      />
-                    </div>
-                  )}
-                </div>
-
-                <div className="border border-gray-200 rounded-lg p-4 space-y-4">
-                  <h3 className="font-semibold text-lg">Organization Information</h3>
-                  <div className="space-y-2 text-sm">
-                    <div>
-                      <span className="text-gray-600">Name:</span>
-                      <p className="font-medium">{orgName}</p>
-                    </div>
-                    <div>
-                      <span className="text-gray-600">Description:</span>
-                      <p className="font-medium">{orgDescription}</p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <span className="text-gray-600">Email:</span>
-                        <p className="font-medium">{orgEmail}</p>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Phone:</span>
-                        <p className="font-medium">{orgPhone}</p>
-                      </div>
-                    </div>
-                    {orgAddress && (
-                      <div>
-                        <span className="text-gray-600">Address:</span>
-                        <p className="font-medium">{orgAddress}</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="border border-gray-200 rounded-lg p-4 space-y-4">
-                  <h3 className="font-semibold text-lg">
-                    Funding Conditions ({conditions.length})
-                  </h3>
-                  <div className="space-y-2">
-                    {conditions.map((condition) => (
-                      <div key={condition.id} className="text-sm">
-                        <p className="font-medium">
-                          {condition.title} - ₹{condition.estimatedFund} ({condition.priority})
-                        </p>
-                        <p className="text-gray-600">{condition.description}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {members.length > 0 && (
-                  <div className="border border-gray-200 rounded-lg p-4 space-y-4">
-                    <h3 className="font-semibold text-lg">Members ({members.length})</h3>
-                    <div className="space-y-1">
-                      {members.map((member) => (
-                        <p key={member.id} className="text-sm">
-                          {member.email} ({member.status})
-                        </p>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className="pt-4 border-t">
-                  <Checkbox id="agree-terms" className="mr-2" />
-                  <Label htmlFor="agree-terms" className="cursor-pointer text-sm">
-                    I confirm that all information provided is accurate and agree to the terms of
-                    service
-                  </Label>
-                </div>
-              </div>
-            )}
           </CardContent>
 
           {/* Navigation Buttons */}
@@ -1374,7 +1056,7 @@ const RegisterNGO = () => {
               <ArrowLeft className="mr-2 h-4 w-4" />
               Previous
             </Button>
-            {currentStep < 5 ? (
+            {currentStep < 3 ? (
               <Button
                 onClick={nextStep}
                 disabled={loading}
@@ -1406,9 +1088,39 @@ const RegisterNGO = () => {
         </Card>
       </div>
       <Footer />
+
+      {/* Photo Confirmation Dialog */}
+      <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirm Photo</DialogTitle>
+            <DialogDescription>
+              Please review your captured photo. Do you want to use this for verification?
+            </DialogDescription>
+          </DialogHeader>
+          {capturedPhoto && (
+            <div className="flex justify-center py-4">
+              <img
+                src={capturedPhoto}
+                alt="Captured photo"
+                className="w-64 h-64 rounded-lg shadow-sm object-cover"
+              />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={retakePhoto}>
+              <X className="mr-2 h-4 w-4" />
+              Retake
+            </Button>
+            <Button onClick={confirmPhoto}>
+              <Check className="mr-2 h-4 w-4" />
+              Confirm & Verify
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
 
 export default RegisterNGO;
-

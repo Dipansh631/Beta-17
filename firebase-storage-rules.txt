@@ -1,0 +1,38 @@
+// Firebase Storage Security Rules
+// Copy and paste these rules in Firebase Console > Storage > Rules
+
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Allow authenticated users to upload to ngo-ids folder
+    match /ngo-ids/{userId}/{fileName} {
+      // Only allow the authenticated user to upload to their own folder
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Allow authenticated users to upload profile photos
+    match /profile-photos/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+      allow delete: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // For development/testing - allow all authenticated uploads
+    // Remove this in production and use specific paths above
+    match /{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
+
+// Steps to update rules:
+// 1. Go to Firebase Console: https://console.firebase.google.com
+// 2. Select your project: "beta-17"
+// 3. Go to Storage > Rules tab
+// 4. Copy and paste the rules above
+// 5. Click "Publish"
+

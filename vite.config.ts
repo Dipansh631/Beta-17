@@ -11,15 +11,9 @@ export default defineConfig(() => ({
       overlay: true,
     },
     proxy: {
-      '/api/clip': {
-        target: 'http://localhost:8000',
+      '/api': {
+        target: 'http://localhost:3000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/clip/, '/api/clip'),
-      },
-      '/api/docext': {
-        target: 'http://localhost:5000',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/docext/, '/api/docext'),
       },
     },
   },
