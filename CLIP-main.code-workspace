@@ -1,0 +1,19 @@
+{
+	"folders": [
+		{
+			"name": "CLIP-main",
+			"path": "../../conditional_answer/CLIP-main"
+		},
+		{
+			"name": "Beta-17-main",
+			"path": "."
+		},
+		{
+			"name": "docext-main",
+			"path": "../../photo_ver_model/docext-main"
+		}
+	],
+	"settings": {
+		"powershell.cwd": "Beta-17-main"
+	}
+}

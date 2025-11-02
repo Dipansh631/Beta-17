@@ -23,13 +23,19 @@ export const connectMongoDB = async () => {
     }
 
     console.log('🔄 Connecting to MongoDB...');
+    console.log('   URI:', MONGODB_URI.replace(/:[^:@]+@/, ':****@')); // Hide password in logs
     
     // MongoDB connection options for better compatibility
+    // Only enable TLS for Atlas connections (mongodb+srv://)
+    const isAtlasConnection = MONGODB_URI.startsWith('mongodb+srv://');
     const clientOptions = {
-      serverSelectionTimeoutMS: 10000, // 10 seconds timeout
+      serverSelectionTimeoutMS: 15000, // 15 seconds timeout
       socketTimeoutMS: 45000, // 45 seconds socket timeout
-      tls: true, // Enable TLS/SSL
-      tlsAllowInvalidCertificates: false, // Don't allow invalid certificates
+      connectTimeoutMS: 15000, // 15 seconds connection timeout
+      ...(isAtlasConnection && {
+        tls: true, // Enable TLS/SSL for Atlas
+        tlsAllowInvalidCertificates: false,
+      }),
     };
 
     client = new MongoClient(MONGODB_URI, clientOptions);

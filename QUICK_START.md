@@ -29,12 +29,6 @@ This starts both servers in one terminal.
 - **Frontend**: http://localhost:8080
 - **Backend API**: http://localhost:3000
 
-## Optional: Install CLIP for Better Verification
-```bash
-cd backend
-pip install -r requirements_verification.txt
-```
-
 ## Environment Setup:
 Make sure `backend/.env` exists with:
 - `GEMINI_API_KEY=your_key` (for AI verification)
@@ -44,4 +38,4 @@ Make sure `backend/.env` exists with:
 1. **Port already in use**: Close other apps using ports 3000/8080
 2. **Module not found**: Run `npm install` in root and `backend` folders
 3. **Backend not starting**: Check `backend/.env` file exists
-4. **CLIP errors**: Install Python deps: `pip install -r backend/requirements_verification.txt`
+4. **Verification errors**: Make sure `GEMINI_API_KEY` is set in `backend/.env`

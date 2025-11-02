@@ -214,7 +214,12 @@ const NGODashboard = () => {
         }));
         
         // Recalculate used money when donations change
-        calculateUsedMoney().then(setUsedMoney);
+        calculateUsedMoney()
+          .then(setUsedMoney)
+          .catch((error) => {
+            console.error("Error calculating used money:", error);
+            // Prevent uncaught promise rejection
+          });
       }, (error) => {
         console.error("Error listening to donations:", error);
       });
@@ -249,11 +254,16 @@ const NGODashboard = () => {
         where("campaignId", "==", campaign.id)
       );
       
-      const unsubscribe = onSnapshot(proofQuery, async () => {
-        // Recalculate used money when workProofs change
-        // calculateUsedMoney now fetches fresh data, so no need for donations dependency
-        const newUsedMoney = await calculateUsedMoney();
-        setUsedMoney(newUsedMoney);
+      const unsubscribe = onSnapshot(proofQuery, async (snapshot) => {
+        try {
+          // Recalculate used money when workProofs change
+          // calculateUsedMoney now fetches fresh data, so no need for donations dependency
+          const newUsedMoney = await calculateUsedMoney();
+          setUsedMoney(newUsedMoney);
+        } catch (error: any) {
+          console.error("Error calculating used money in snapshot listener:", error);
+          // Don't set state on error to avoid UI issues
+        }
       }, (error) => {
         console.error("Error listening to workProofs:", error);
       });
@@ -690,8 +700,9 @@ const NGODashboard = () => {
         formData.append("conditions", JSON.stringify(allocatedConditions));
         formData.append("requireConditionMatch", "true");
 
-        console.log(`Verifying image ${index + 1}/${proofPhotos.length}...`);
-        console.log('Conditions being checked:', allocatedConditions.map(c => c.title).join(', '));
+        console.log(`🤖 Verifying image ${index + 1}/${proofPhotos.length} with LLaVA model...`);
+        console.log('   Using: llava-hf/llava-1.5-7b-hf');
+        console.log('   Conditions being checked:', allocatedConditions.map(c => c.title).join(', '));
 
         const response = await axios.post(getApiUrl("/api/upload-file"), formData, {
           headers: {
@@ -711,9 +722,9 @@ const NGODashboard = () => {
         if (response.data.success === true && fileUrl) {
           verificationStatus.set(index, {
             status: 'verified',
-            message: 'Image verified: Real photo matching allocated conditions'
+            message: 'Image verified by LLaVA: Real photo matching allocated conditions'
           });
-          console.log(`✅ Image ${index + 1} verified successfully`);
+          console.log(`✅ Image ${index + 1} verified successfully by LLaVA`);
         } else {
           // Check if there's a specific verification error message
           const errorMsg = response.data.message || response.data.verification?.reason || 'Verification failed';
@@ -725,19 +736,29 @@ const NGODashboard = () => {
           console.error(`❌ Image ${index + 1} verification failed:`, errorMsg);
         }
       } catch (error: any) {
-        // More detailed error handling
-        logError(`Image ${index + 1} verification error`, error);
-        
-        const errorMessage = getErrorMessage(error);
-        const status = error.response?.status;
+        // More detailed error handling with try-catch to prevent double errors
+        try {
+          logError(`Image ${index + 1} verification error`, error);
+          
+          const errorMessage = getErrorMessage(error);
+          const status = error.response?.status;
 
-        verificationStatus.set(index, {
-          status: 'failed',
-          message: status === 400 
-            ? `Verification failed: ${errorMessage}` 
-            : `Error (${status || 'Network'}): ${errorMessage}`
-        });
-        allVerified = false;
+          verificationStatus.set(index, {
+            status: 'failed',
+            message: status === 400 
+              ? `Verification failed: ${errorMessage}` 
+              : `Error (${status || 'Network'}): ${errorMessage}`
+          });
+          allVerified = false;
+        } catch (innerError) {
+          // Prevent uncaught exceptions in error handler
+          console.error("Error in verification error handler:", innerError);
+          verificationStatus.set(index, {
+            status: 'failed',
+            message: 'Verification error occurred'
+          });
+          allVerified = false;
+        }
       }
 
       // Update status after each verification
@@ -748,14 +769,14 @@ const NGODashboard = () => {
 
     if (allVerified) {
       toast({
-        title: "✅ All Images Verified",
-        description: `All ${proofPhotos.length} image(s) passed verification. They are real photos and match the allocated conditions.`,
+        title: "✅ All Images Verified by LLaVA",
+        description: `All ${proofPhotos.length} image(s) passed LLaVA verification. They are real photos and match the allocated conditions.`,
       });
     } else {
       const failedCount = Array.from(verificationStatus.values()).filter(v => v.status === 'failed').length;
       toast({
-        title: "⚠️ Verification Failed",
-        description: `${failedCount} out of ${proofPhotos.length} image(s) failed verification. Please check the details and remove or replace failed images.`,
+        title: "⚠️ LLaVA Verification Failed",
+        description: `${failedCount} out of ${proofPhotos.length} image(s) failed LLaVA verification. Please check the details and remove or replace failed images.`,
         variant: "destructive",
       });
     }
@@ -1478,6 +1499,7 @@ const NGODashboard = () => {
                 <CardTitle>Submit Work Proof</CardTitle>
                 <CardDescription>
                   Upload photos and show how donated money was used by allocating amounts across conditions.
+                  Images will be verified using LLaVA AI model to ensure they match your conditions.
                   This proof will be visible to all donors who contributed to this organization.
                 </CardDescription>
               </CardHeader>
@@ -1491,6 +1513,7 @@ const NGODashboard = () => {
                         </h3>
                         <p className="text-sm text-gray-600">
                           Upload proof photos and allocate how much money was used for each condition.
+                          Photos will be verified using LLaVA AI model to ensure authenticity and condition matching.
                           All donors for {campaign?.details.ngo_name} will be able to see this proof.
                         </p>
                       </div>
@@ -1643,7 +1666,8 @@ const NGODashboard = () => {
           <DialogHeader>
             <DialogTitle>Submit Work Proof</DialogTitle>
             <DialogDescription>
-              Upload photos and allocate money used across conditions. This proof will be visible to all donors who contributed to {campaign?.details.ngo_name}.
+              Upload photos and allocate money used across conditions. Images will be verified using LLaVA AI model to ensure they match your allocated conditions.
+              This proof will be visible to all donors who contributed to {campaign?.details.ngo_name}.
             </DialogDescription>
           </DialogHeader>
 
@@ -1692,7 +1716,7 @@ const NGODashboard = () => {
                         ) : (
                           <>
                             <CheckCircle2 className="mr-2 h-4 w-4" />
-                            Verify Images (Check AI & Condition Match)
+                            Verify Images with LLaVA (AI & Condition Match)
                           </>
                         )}
                       </Button>

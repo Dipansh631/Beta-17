@@ -133,12 +133,15 @@ app.post('/api/extract-id', extractIdRoute);
 app.post('/api/verify-face', verifyFaceRoute);
 app.post('/api/register-ngo', registerNgoRoute);
 
-// Health check
-app.get('/health', (req, res) => {
+// Health check - check actual MongoDB connection status
+app.get('/health', async (req, res) => {
+  const { isMongoDBConnected } = await import('./config/mongodb.js');
+  const actuallyConnected = isMongoDBConnected();
+  
   res.json({ 
     status: 'ok', 
     message: 'NGO Registration API is running',
-    mongodb: mongoConnected ? 'connected' : 'disconnected'
+    mongodb: actuallyConnected ? 'connected' : 'disconnected'
   });
 });
 

@@ -7,7 +7,6 @@ import dotenv from 'dotenv';
 import { verifyImageWithGemini } from './verifyImage.js';
 
 dotenv.config();
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // Configure multer for in-memory storage (for MongoDB GridFS)
 const storage = multer.memoryStorage();
@@ -69,9 +68,9 @@ const uploadFile = async (req, res) => {
     }
 
     // Image verification if requested (for NGO image uploads)
-    // Skip verification if API key is not configured
-    if (req.body.verifyImage === 'true' && req.file.mimetype.startsWith('image/') && GEMINI_API_KEY) {
-      console.log('🔍 Image verification requested...');
+    // Uses LLaVA model for verification (no API key required)
+    if (req.body.verifyImage === 'true' && req.file.mimetype.startsWith('image/')) {
+      console.log('🔍 Image verification requested (using LLaVA model)...');
       console.log('   Conditions provided:', !!req.body.conditions);
       console.log('   Require verification:', req.body.requireVerification === 'true');
       
@@ -191,27 +190,40 @@ const uploadFile = async (req, res) => {
         // All errors that reach here are configuration issues (not actual verification failures)
         console.warn('⚠️ Verification configuration issue detected - allowing upload without verification');
         console.warn('   Error:', errorMessage);
-        console.warn('   Error type: Configuration/Model availability issue');
-        console.warn('   Fix: Set a valid GEMINI_API_KEY in backend/.env or ensure vision models are available');
+        console.warn('   Error type: LLaVA Model availability issue');
+        console.warn('   Fix: Install Python dependencies: pip install -r backend/requirements_verification.txt');
         console.warn('   Upload will proceed without verification');
         
         // Always allow upload if it's a configuration error (we already checked for actual failures above)
         // Continue with upload - don't return error
       }
-    } else if (req.body.verifyImage === 'true' && req.file.mimetype.startsWith('image/') && !GEMINI_API_KEY) {
-      // Verification requested but API key not configured - allow upload
-      console.warn('⚠️ Image verification requested but GEMINI_API_KEY not configured');
-      console.warn('   Allowing upload without verification');
-      console.warn('   Set GEMINI_API_KEY in backend/.env to enable verification');
     }
 
-    const mongoDB = getMongoDB();
+    let mongoDB = getMongoDB();
     if (!mongoDB || !mongoDB.gridFSBucket) {
-      return res.status(503).json({
-        success: false,
-        message: 'MongoDB not connected. Please check MongoDB connection and Atlas IP whitelist.',
-        error: 'MongoDB connection failed. File upload unavailable.',
-      });
+      // Try to reconnect once before giving up
+      console.log('⚠️ MongoDB not connected, attempting reconnection...');
+      try {
+        const { connectMongoDB } = await import('../config/mongodb.js');
+        await connectMongoDB();
+        mongoDB = getMongoDB();
+        
+        if (!mongoDB || !mongoDB.gridFSBucket) {
+          return res.status(503).json({
+            success: false,
+            message: 'MongoDB not connected. Please check MongoDB connection and Atlas IP whitelist.',
+            error: 'MongoDB connection failed. File upload unavailable.',
+          });
+        }
+        console.log('✅ MongoDB reconnected, proceeding with upload');
+      } catch (reconnectError) {
+        console.error('❌ MongoDB reconnection failed:', reconnectError.message);
+        return res.status(503).json({
+          success: false,
+          message: 'MongoDB not connected. Please check MongoDB connection and Atlas IP whitelist.',
+          error: `MongoDB connection failed: ${reconnectError.message}`,
+        });
+      }
     }
 
     const { gridFSBucket } = mongoDB;

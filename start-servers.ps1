@@ -26,16 +26,6 @@ if (-not (Test-Path "backend\node_modules")) {
     Set-Location ..
 }
 
-# Check Python dependencies for CLIP (optional)
-Write-Host "🐍 Checking Python dependencies for CLIP verification..." -ForegroundColor Yellow
-try {
-    $null = python -c "import transformers; print('OK')" 2>$null
-    Write-Host "   ✅ Python dependencies OK" -ForegroundColor Green
-} catch {
-    Write-Host "   ⚠️  Python transformers not installed. CLIP verification will fallback to Gemini." -ForegroundColor Yellow
-    Write-Host "   To install: cd backend; pip install -r requirements_verification.txt" -ForegroundColor Yellow
-}
-
 # Check .env file
 $backendEnvPath = Join-Path "backend" ".env"
 if (-not (Test-Path $backendEnvPath)) {
@@ -71,5 +61,5 @@ Write-Host ""
 Write-Host "📋 Next steps:" -ForegroundColor Yellow
 Write-Host "   1. Wait for both servers to start (about 10-15 seconds)" -ForegroundColor White
 Write-Host "   2. Open http://localhost:8080 in your browser" -ForegroundColor White
-Write-Host "   3. If CLIP verification needed, install: cd backend; pip install -r requirements_verification.txt" -ForegroundColor White
+Write-Host "   3. Make sure GEMINI_API_KEY is set in backend/.env for image verification" -ForegroundColor White
 Write-Host ""
