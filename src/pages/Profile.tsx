@@ -5,6 +5,7 @@ import {
   doc,
   getDoc,
   updateDoc,
+  setDoc,
   serverTimestamp,
   collection,
   query,
@@ -115,7 +116,8 @@ const Profile = () => {
           );
           const donationsSnapshot = await getDocs(donationsQuery);
           const totalRaised = donationsSnapshot.docs.reduce((sum, doc) => {
-            return sum + (doc.data().amount || 0);
+            const amount = doc.data().amount;
+            return sum + (typeof amount === 'number' ? amount : Number(amount) || 0);
           }, 0);
 
           // Get work proofs
@@ -148,11 +150,11 @@ const Profile = () => {
             campaignId,
             ngoName: ngoData.details?.ngo_name || "Unknown",
             description: ngoData.details?.description || "",
-            totalRaised,
-            totalUsed,
-            remaining: Math.max(0, totalRaised - totalUsed), // Never show negative
+            totalRaised: totalRaised ?? 0,
+            totalUsed: totalUsed ?? 0,
+            remaining: Math.max(0, (totalRaised ?? 0) - (totalUsed ?? 0)), // Never show negative
             latestProof,
-            galleryImages,
+            galleryImages: galleryImages || [],
           };
         })
       );
@@ -278,10 +280,28 @@ const Profile = () => {
       setPasswordError("");
 
       const userProfileRef = doc(db, "users", currentUser.uid);
-      await updateDoc(userProfileRef, {
+      
+      // Use setDoc with merge: true to create or update the document
+      // This avoids 400 errors if the document doesn't exist
+      // merge: true will only update the fields we provide, preserving existing data
+      const updateData: any = {
         paymentPassword: paymentPassword, // In production, hash this password
         lastUpdated: serverTimestamp(),
-      });
+      };
+      
+      // If profile doesn't exist, set initial fields too
+      if (!profile) {
+        updateData.uid = currentUser.uid;
+        updateData.email = currentUser.email || "";
+        updateData.displayName = currentUser.displayName || "User";
+        updateData.donationHistory = [];
+        updateData.totalDonated = 0;
+        updateData.donationCount = 0;
+        updateData.badges = [];
+        updateData.createdAt = serverTimestamp();
+      }
+      
+      await setDoc(userProfileRef, updateData, { merge: true });
 
       toast({
         title: "✅ Payment Password Set",
@@ -296,7 +316,20 @@ const Profile = () => {
       // Reload profile
       await loadProfile();
     } catch (error: any) {
-      setPasswordError(error.message || "Failed to set payment password");
+      console.error("Error setting payment password:", error);
+      const errorMessage = error.code === 'permission-denied' 
+        ? "Permission denied. Please check your Firestore security rules."
+        : error.code === 'unavailable'
+        ? "Firestore service is temporarily unavailable. Please try again."
+        : error.message || "Failed to set payment password";
+      
+      setPasswordError(errorMessage);
+      
+      toast({
+        title: "❌ Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
       setSavingPassword(false);
     }
@@ -396,7 +429,7 @@ const Profile = () => {
                 <div>
                   <Label className="text-gray-600">Total Donated</Label>
                   <p className="text-2xl font-bold text-black">
-                    ₹{profile?.totalDonated.toLocaleString() || 0}
+                    ₹{(profile?.totalDonated ?? 0).toLocaleString()}
                   </p>
                 </div>
                 <div>
@@ -531,15 +564,15 @@ const Profile = () => {
                           <div className="grid grid-cols-3 gap-3 mt-4">
                             <div className="bg-white p-3 rounded-lg border">
                               <p className="text-xs text-gray-600 mb-1">Total Received</p>
-                              <p className="font-bold text-black">₹{result.totalRaised.toLocaleString()}</p>
+                              <p className="font-bold text-black">₹{(result.totalRaised ?? 0).toLocaleString()}</p>
                             </div>
                             <div className="bg-green-50 p-3 rounded-lg border border-green-200">
                               <p className="text-xs text-gray-600 mb-1">Amount Used</p>
-                              <p className="font-bold text-green-600">₹{result.totalUsed.toLocaleString()}</p>
+                              <p className="font-bold text-green-600">₹{(result.totalUsed ?? 0).toLocaleString()}</p>
                             </div>
                             <div className="bg-orange-50 p-3 rounded-lg border border-orange-200">
                               <p className="text-xs text-gray-600 mb-1">Amount Remaining</p>
-                              <p className="font-bold text-orange-600">₹{result.remaining.toLocaleString()}</p>
+                              <p className="font-bold text-orange-600">₹{(result.remaining ?? 0).toLocaleString()}</p>
                             </div>
                           </div>
 
@@ -629,7 +662,7 @@ const Profile = () => {
                                   <div className="flex items-center gap-2">
                                     <DollarSign className="h-3 w-3" />
                                     <span>
-                                      Amount: <strong className="text-black">₹{donation.amount.toLocaleString()}</strong>
+                                      Amount: <strong className="text-black">₹{(donation.amount ?? 0).toLocaleString()}</strong>
                                     </span>
                                   </div>
                                   <div className="flex items-center gap-2">

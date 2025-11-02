@@ -120,6 +120,37 @@ const getApiUrl = (endpoint: string) => {
   return `${baseUrl}${endpoint}`;
 };
 
+// Helper function to extract error message from axios errors
+const getErrorMessage = (error: any): string => {
+  if (error.response?.data?.message) {
+    return error.response.data.message;
+  }
+  if (error.response?.data?.verification?.reason) {
+    return error.response.data.verification.reason;
+  }
+  if (error.response?.data?.error) {
+    return typeof error.response.data.error === 'string' 
+      ? error.response.data.error 
+      : error.response.data.error?.message || 'Unknown error';
+  }
+  if (error.message) {
+    return error.message;
+  }
+  return 'An unexpected error occurred. Please try again.';
+};
+
+// Helper function to log error details
+const logError = (context: string, error: any) => {
+  console.error(`❌ ${context}:`, {
+    message: error.message,
+    status: error.response?.status,
+    statusText: error.response?.statusText,
+    data: error.response?.data,
+    url: error.config?.url,
+    method: error.config?.method,
+  });
+};
+
 const NGODashboard = () => {
   const { currentUser } = useAuth();
   const { toast } = useToast();
@@ -355,23 +386,30 @@ const NGODashboard = () => {
           }
         } catch (uploadError: any) {
           // Handle verification failure or upload error
-          console.error("Image upload error:", uploadError);
-          console.error("Error response:", uploadError.response?.data);
-          console.error("Error status:", uploadError.response?.status);
+          logError(`Gallery upload error for ${file.name}`, uploadError);
           
-          let errorMessage = "Unknown error occurred";
+          const errorMessage = getErrorMessage(uploadError);
+          const status = uploadError.response?.status;
           
-          if (uploadError.response?.data?.message) {
-            errorMessage = uploadError.response.data.message;
-          } else if (uploadError.message) {
-            errorMessage = uploadError.message;
-          }
-          
-          if (uploadError.response?.status === 400) {
+          if (status === 400) {
             toast({
-              title: "⚠️ Image Upload Failed",
+              title: "⚠️ Image Upload Failed (400 Bad Request)",
               description: `${file.name}: ${errorMessage}`,
               variant: "destructive",
+              duration: 8000,
+            });
+          } else if (status === 413) {
+            toast({
+              title: "File Too Large",
+              description: `${file.name} exceeds the 10MB size limit. Please use a smaller image.`,
+              variant: "destructive",
+            });
+          } else if (status === 503) {
+            toast({
+              title: "Service Unavailable",
+              description: "MongoDB connection failed. Please check backend connection and try again.",
+              variant: "destructive",
+              duration: 10000,
             });
           } else {
             toast({
@@ -688,20 +726,16 @@ const NGODashboard = () => {
         }
       } catch (error: any) {
         // More detailed error handling
-        const errorMessage = error.response?.data?.message || 
-                           error.response?.data?.verification?.reason ||
-                           error.message || 
-                           'Verification failed';
+        logError(`Image ${index + 1} verification error`, error);
         
-        console.error(`❌ Image ${index + 1} verification error:`, {
-          message: errorMessage,
-          status: error.response?.status,
-          data: error.response?.data
-        });
+        const errorMessage = getErrorMessage(error);
+        const status = error.response?.status;
 
         verificationStatus.set(index, {
           status: 'failed',
-          message: errorMessage
+          message: status === 400 
+            ? `Verification failed: ${errorMessage}` 
+            : `Error (${status || 'Network'}): ${errorMessage}`
         });
         allVerified = false;
       }
@@ -920,16 +954,35 @@ const NGODashboard = () => {
           }
         } catch (uploadError: any) {
           // Handle verification failure or upload error
-          if (uploadError.response?.status === 400 && uploadError.response?.data?.message) {
+          logError(`Work proof upload error for photo ${proofPhotos.indexOf(photo) + 1}`, uploadError);
+          
+          const errorMessage = getErrorMessage(uploadError);
+          const status = uploadError.response?.status;
+          
+          if (status === 400) {
             toast({
-              title: "⚠️ Image Verification Failed",
-              description: uploadError.response.data.message,
+              title: "⚠️ Image Verification Failed (400)",
+              description: errorMessage,
               variant: "destructive",
+              duration: 8000,
+            });
+          } else if (status === 413) {
+            toast({
+              title: "File Too Large",
+              description: "Image exceeds the 10MB size limit. Please use a smaller image.",
+              variant: "destructive",
+            });
+          } else if (status === 503) {
+            toast({
+              title: "Service Unavailable",
+              description: "MongoDB connection failed. Please check backend connection and try again.",
+              variant: "destructive",
+              duration: 10000,
             });
           } else {
             toast({
               title: "Upload Failed",
-              description: uploadError.message || "Failed to upload image",
+              description: errorMessage,
               variant: "destructive",
             });
           }
@@ -1545,8 +1598,15 @@ const NGODashboard = () => {
                             className="w-full h-48 object-cover rounded-lg border cursor-pointer hover:opacity-90 transition-opacity"
                             onClick={() => window.open(fullUrl, '_blank')}
                             onError={(e) => {
-                              console.error("Image load error:", fullUrl);
+                              logError(`Gallery image load error (index ${index})`, { 
+                                url: fullUrl, 
+                                originalUrl: imageUrl,
+                                message: 'Failed to load image - server returned error or image not found'
+                              });
+                              // Prevent console errors from showing 400 in network tab
                               e.currentTarget.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Crect width='200' height='200' fill='%23f3f4f6'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-family='Arial' font-size='14' fill='%236b7280'%3EImage not found%3C/text%3E%3C/svg%3E";
+                              // Stop propagation to prevent further error handling
+                              e.stopPropagation();
                             }}
                           />
                           <Button
