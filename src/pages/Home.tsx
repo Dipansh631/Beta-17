@@ -377,47 +377,171 @@ const Home = () => {
       </section>
 
       {/* How It Works */}
-      <section className="py-20">
+      <section className="py-20 bg-secondary/30">
         <div className="container mx-auto px-4">
           <div className="text-center mb-12">
             <h2 className="font-heading text-4xl font-bold mb-4">
               How DonateFlow Works
             </h2>
-            <p className="text-lg text-muted-foreground">
-              Simple, transparent, and secure
+            <p className="text-lg text-muted-foreground max-w-3xl mx-auto mb-8">
+              DonateFlow revolutionizes charitable giving by ensuring complete transparency, accountability, and verification at every step. Here's how our platform works to create trust and maximize impact.
             </p>
           </div>
-          <div className="grid md:grid-cols-4 gap-8">
-            {[
-              {
-                step: "1",
-                title: "Choose a Condition",
-                description: "Browse campaigns and select the specific condition you want to fund",
-              },
-              {
-                step: "2",
-                title: "Make Payment",
-                description: "Donate securely. Funds go directly to the NGO",
-              },
-              {
-                step: "3",
-                title: "NGO Takes Action",
-                description: "NGO uses funds for chosen condition and uploads photo/video proof",
-              },
-              {
-                step: "4",
-                title: "Receive Verified Report",
-                description: "AI verifies proof and you get detailed report with breakdown",
-              },
-            ].map((item) => (
-              <div key={item.step} className="text-center">
-                <div className="w-16 h-16 bg-accent text-accent-foreground rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-4 shadow-soft">
-                  {item.step}
+
+          <div className="max-w-4xl mx-auto space-y-12">
+            {/* Step 1 */}
+            <Card className="p-8 shadow-card">
+              <div className="flex items-start gap-6">
+                <div className="w-16 h-16 bg-accent text-accent-foreground rounded-full flex items-center justify-center text-2xl font-bold flex-shrink-0 shadow-soft">
+                  1
                 </div>
-                <h3 className="font-heading text-lg font-bold mb-2">{item.title}</h3>
-                <p className="text-sm text-muted-foreground">{item.description}</p>
+                <div className="flex-1">
+                  <h3 className="font-heading text-2xl font-bold mb-4">Browse and Choose Specific Conditions</h3>
+                  <p className="text-base text-muted-foreground leading-relaxed mb-4">
+                    Start by browsing our verified NGO campaigns. Each NGO campaign lists specific conditions or purposes for which they need funding. For example, a disaster relief campaign might have separate conditions like "Food Supplies" (₹50,000), "Medical Aid" (₹30,000), and "Shelter Materials" (₹20,000). You can see exactly how much is needed for each condition and how much has already been raised.
+                  </p>
+                  <p className="text-base text-muted-foreground leading-relaxed">
+                    When you select a campaign, you'll see detailed information about the NGO, their goals, and each funding condition. You choose exactly which condition(s) you want to support, ensuring your donation goes precisely where you intend. Your donation amount is automatically divided equally across the conditions you select, or you can specify exact amounts for each condition.
+                  </p>
+                </div>
               </div>
-            ))}
+            </Card>
+
+            {/* Step 2 */}
+            <Card className="p-8 shadow-card">
+              <div className="flex items-start gap-6">
+                <div className="w-16 h-16 bg-accent text-accent-foreground rounded-full flex items-center justify-center text-2xl font-bold flex-shrink-0 shadow-soft">
+                  2
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-heading text-2xl font-bold mb-4">Secure Payment with Payment Password</h3>
+                  <p className="text-base text-muted-foreground leading-relaxed mb-4">
+                    When you're ready to donate, you'll be asked to set up a payment password in your profile (if you haven't already). This adds an extra layer of security to prevent unauthorized transactions. Enter your payment password to confirm the donation amount.
+                  </p>
+                  <p className="text-base text-muted-foreground leading-relaxed mb-4">
+                    Your donation is processed securely, and the funds are immediately recorded in the NGO's account. You'll receive instant confirmation, and your donation is added to your profile's donation history. As you donate, you'll earn badges for milestones (1st donation, 5 donations, 10, 25, 50, 100, 150, 200 donations) and ranks based on your total contribution (Bronze, Silver, Gold, Diamond).
+                  </p>
+                  <p className="text-base text-muted-foreground leading-relaxed">
+                    The platform ensures that donations stop automatically once a condition's funding goal is reached, preventing overfunding. If a campaign or condition reaches its target, it's removed from active listings but remains visible in donor profiles for historical tracking.
+                  </p>
+                </div>
+              </div>
+            </Card>
+
+            {/* Step 3 */}
+            <Card className="p-8 shadow-card">
+              <div className="flex items-start gap-6">
+                <div className="w-16 h-16 bg-accent text-accent-foreground rounded-full flex items-center justify-center text-2xl font-bold flex-shrink-0 shadow-soft">
+                  3
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-heading text-2xl font-bold mb-4">NGO Uses Funds and Submits Proof</h3>
+                  <p className="text-base text-muted-foreground leading-relaxed mb-4">
+                    After receiving donations, NGOs use the funds for the specific conditions you funded. When they've completed work related to those conditions, NGO members upload proof photos showing the actual work done. Before submission, our AI verification system checks every image to ensure:
+                  </p>
+                  <ul className="list-disc list-inside text-base text-muted-foreground space-y-2 mb-4 ml-4">
+                    <li>The images are real photographs (not AI-generated or synthetic)</li>
+                    <li>The images actually show work related to the conditions you funded</li>
+                    <li>The photos provide genuine evidence of impact</li>
+                  </ul>
+                  <p className="text-base text-muted-foreground leading-relaxed mb-4">
+                    NGOs also allocate how the money was used across different conditions. For example, if you donated ₹5,000 to a campaign with "Food Supplies" and "Medical Aid" conditions, the NGO might allocate ₹3,000 to food supplies and ₹2,000 to medical aid, showing you exactly how your donation was utilized.
+                  </p>
+                  <p className="text-base text-muted-foreground leading-relaxed">
+                    The proof submission includes photos, a description of the work, and a breakdown showing the percentage and amount spent on each condition. All of this is viewable in your donation history and on the "Live NGO Results" section of your profile.
+                  </p>
+                </div>
+              </div>
+            </Card>
+
+            {/* Step 4 */}
+            <Card className="p-8 shadow-card">
+              <div className="flex items-start gap-6">
+                <div className="w-16 h-16 bg-accent text-accent-foreground rounded-full flex items-center justify-center text-2xl font-bold flex-shrink-0 shadow-soft">
+                  4
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-heading text-2xl font-bold mb-4">View Verified Proof and Track Impact</h3>
+                  <p className="text-base text-muted-foreground leading-relaxed mb-4">
+                    Once the NGO submits proof, you can view it in multiple places:
+                  </p>
+                  <ul className="list-disc list-inside text-base text-muted-foreground space-y-2 mb-4 ml-4">
+                    <li><strong>Your Profile's Donation History:</strong> Each donation has a "View Proof & Allocation" link showing detailed breakdowns with pie charts</li>
+                    <li><strong>Live NGO Results:</strong> See real-time updates from all NGOs you've supported, including total received, amount used, amount remaining, and latest work proof</li>
+                    <li><strong>Donation Proof Page:</strong> Detailed view with photo galleries, allocation breakdowns, and work descriptions</li>
+                  </ul>
+                  <p className="text-base text-muted-foreground leading-relaxed mb-4">
+                    The platform provides complete transparency with visual pie charts showing exactly how your donation was divided across conditions, photo galleries of the actual work, and real-time tracking of NGO wallet balances (total received, amount used, amount remaining).
+                  </p>
+                  <p className="text-base text-muted-foreground leading-relaxed">
+                    Our AI verification ensures that all proof images are authentic and relevant to the work described. Only verified, real photographs of actual NGO activities are accepted, giving you confidence that your donation created genuine impact.
+                  </p>
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          {/* Additional Features */}
+          <div className="mt-16 max-w-4xl mx-auto">
+            <Card className="p-8 gradient-accent text-accent-foreground shadow-soft">
+              <h3 className="font-heading text-2xl font-bold mb-4">Key Features That Make DonateFlow Special</h3>
+              <div className="grid md:grid-cols-2 gap-6">
+                <div>
+                  <h4 className="font-bold mb-2 flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5" />
+                    Complete Transparency
+                  </h4>
+                  <p className="text-sm opacity-90">
+                    Every rupee is tracked from donation to utilization. See exactly how your money was used with photo proof and detailed allocations.
+                  </p>
+                </div>
+                <div>
+                  <h4 className="font-bold mb-2 flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5" />
+                    AI-Powered Verification
+                  </h4>
+                  <p className="text-sm opacity-90">
+                    Advanced AI checks every proof image to ensure authenticity and relevance, rejecting AI-generated or irrelevant photos automatically.
+                  </p>
+                </div>
+                <div>
+                  <h4 className="font-bold mb-2 flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5" />
+                    Condition-Specific Funding
+                  </h4>
+                  <p className="text-sm opacity-90">
+                    Choose exactly what your donation funds. Your money is allocated to specific conditions, not general expenses.
+                  </p>
+                </div>
+                <div>
+                  <h4 className="font-bold mb-2 flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5" />
+                    Real-Time Tracking
+                  </h4>
+                  <p className="text-sm opacity-90">
+                    Watch your impact in real-time with live updates on NGO progress, wallet balances, and proof submissions.
+                  </p>
+                </div>
+                <div>
+                  <h4 className="font-bold mb-2 flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5" />
+                    Gamification & Recognition
+                  </h4>
+                  <p className="text-sm opacity-90">
+                    Earn badges for donation milestones and ranks based on your total contribution. Top donors are featured on the homepage.
+                  </p>
+                </div>
+                <div>
+                  <h4 className="font-bold mb-2 flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5" />
+                    Secure Payment System
+                  </h4>
+                  <p className="text-sm opacity-90">
+                    Payment password protection adds an extra layer of security to prevent unauthorized transactions.
+                  </p>
+                </div>
+              </div>
+            </Card>
           </div>
         </div>
       </section>

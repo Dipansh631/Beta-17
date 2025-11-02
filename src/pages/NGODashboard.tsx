@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/integrations/firebase/config";
 import {
@@ -162,7 +162,33 @@ const NGODashboard = () => {
 
   useEffect(() => {
     if (campaign) {
-      loadDonations();
+      // Set up real-time listener for donations to update wallet amounts automatically
+      const donationsQuery = query(
+        collection(db, "donations"),
+        where("campaignId", "==", campaign.id)
+      );
+      
+      const unsubscribe = onSnapshot(donationsQuery, (snapshot) => {
+        const donationsData: Donation[] = [];
+        snapshot.forEach((doc) => {
+          donationsData.push({ id: doc.id, ...doc.data() } as Donation);
+        });
+        setDonations(donationsData.sort((a, b) => {
+          const aTime = a.timestamp?.toDate?.()?.getTime() || 0;
+          const bTime = b.timestamp?.toDate?.()?.getTime() || 0;
+          return bTime - aTime;
+        }));
+        
+        // Recalculate used money when donations change
+        calculateUsedMoney().then(setUsedMoney);
+      }, (error) => {
+        console.error("Error listening to donations:", error);
+      });
+      
+      return () => unsubscribe();
+    } else {
+      // Reset donations when no campaign is selected
+      setDonations([]);
     }
   }, [campaign]);
 
@@ -182,7 +208,6 @@ const NGODashboard = () => {
     if (campaign) {
       initializeConditionAllocations();
       loadGalleryImages();
-      calculateUsedMoney().then(setUsedMoney);
       
       // Set up real-time listener for workProofs to update usedMoney automatically
       const proofQuery = query(
@@ -192,6 +217,7 @@ const NGODashboard = () => {
       
       const unsubscribe = onSnapshot(proofQuery, async () => {
         // Recalculate used money when workProofs change
+        // calculateUsedMoney now fetches fresh data, so no need for donations dependency
         const newUsedMoney = await calculateUsedMoney();
         setUsedMoney(newUsedMoney);
       }, (error) => {
@@ -221,6 +247,7 @@ const NGODashboard = () => {
   const calculateUsedMoney = async () => {
     if (!campaign) return 0;
     try {
+      // Fetch fresh workProofs data for this specific campaign
       const proofQuery = query(
         collection(db, "workProofs"),
         where("campaignId", "==", campaign.id)
@@ -229,19 +256,34 @@ const NGODashboard = () => {
       let totalUsed = 0;
       proofSnapshot.forEach((doc) => {
         const proof = doc.data();
-        if (proof.conditionAllocations) {
+        // Ensure proof belongs to this campaign
+        if (proof.campaignId === campaign.id && proof.conditionAllocations) {
           const proofTotal = proof.conditionAllocations.reduce(
-            (sum: number, alloc: { amount: number }) => sum + alloc.amount,
+            (sum: number, alloc: { amount: number }) => {
+              const amount = typeof alloc.amount === 'number' ? alloc.amount : Number(alloc.amount) || 0;
+              return sum + amount;
+            },
             0
           );
           totalUsed += proofTotal;
         }
       });
       
-      // Ensure used money never exceeds total received
-      // Get total received for validation
-      const selectedDonations = donations.filter(d => d.campaignId === campaign.id);
-      const walletBalance = selectedDonations.reduce((sum, d) => sum + d.amount, 0);
+      // Fetch fresh donations data for this specific campaign to ensure accuracy
+      const donationsQuery = query(
+        collection(db, "donations"),
+        where("campaignId", "==", campaign.id)
+      );
+      const donationsSnapshot = await getDocs(donationsQuery);
+      let walletBalance = 0;
+      donationsSnapshot.forEach((doc) => {
+        const donation = doc.data();
+        // Double-check campaignId matches
+        if (donation.campaignId === campaign.id) {
+          const amount = typeof donation.amount === 'number' ? donation.amount : Number(donation.amount) || 0;
+          walletBalance += amount;
+        }
+      });
       
       // Cap used money at wallet balance
       return Math.min(totalUsed, walletBalance);
@@ -689,8 +731,9 @@ const NGODashboard = () => {
       .reduce((sum, alloc) => sum + alloc.amount, 0);
     
     // Calculate maximum allowed amount (remaining money = walletBalance - usedMoney)
-    const selectedDonations = donations.filter(d => d.campaignId === campaign?.id || !campaign);
-    const walletBalance = selectedDonations.reduce((sum, d) => sum + d.amount, 0);
+    if (!campaign) return;
+    const selectedDonations = donations.filter(d => d.campaignId === campaign.id);
+    const walletBalance = selectedDonations.reduce((sum, d) => sum + (d.amount || 0), 0);
     const remainingMoney = Math.max(0, walletBalance - usedMoney);
     
     // Maximum amount for this allocation = remaining money - other allocations
@@ -742,8 +785,9 @@ const NGODashboard = () => {
     }
 
     // Validate that total allocated doesn't exceed available balance
+    if (!campaign) return;
     const selectedDonations = donations.filter(d => d.campaignId === campaign.id);
-    const walletBalance = selectedDonations.reduce((sum, d) => sum + d.amount, 0);
+    const walletBalance = selectedDonations.reduce((sum, d) => sum + (d.amount || 0), 0);
     const remainingMoney = Math.max(0, walletBalance - usedMoney);
     
     if (totalAllocated > remainingMoney) {
@@ -946,6 +990,54 @@ const NGODashboard = () => {
     initializeConditionAllocations();
   };
 
+  // Calculate wallet stats for selected NGO - use memoized calculations for accuracy
+  // IMPORTANT: This hook must be called before any early returns to maintain hook order
+  const walletStats = useMemo(() => {
+    if (!campaign) {
+      return {
+        walletBalance: 0,
+        cappedUsedMoney: 0,
+        remainingMoney: 0,
+        totalRaised: 0,
+        proofsSubmitted: 0,
+        donationCount: 0,
+      };
+    }
+    
+    // Filter donations for this specific campaign only
+    // Note: donations state is already filtered by the listener, but double-check for safety
+    const selectedDonations = donations.filter(d => {
+      // Ensure campaignId matches exactly
+      return d.campaignId === campaign.id && d.amount != null;
+    });
+    
+    // Calculate total raised - ensure all amounts are numbers
+    const totalRaised = selectedDonations.reduce((sum, d) => {
+      const amount = typeof d.amount === 'number' ? d.amount : Number(d.amount) || 0;
+      return sum + amount;
+    }, 0);
+    
+    const proofsSubmitted = selectedDonations.filter((d) => d.proofSubmitted).length;
+    const walletBalance = totalRaised; // Total money recorded/received
+    
+    // Ensure used money never exceeds wallet balance
+    const cappedUsedMoney = Math.min(usedMoney, walletBalance);
+    const remainingMoney = Math.max(0, walletBalance - cappedUsedMoney); // Money received but not yet justified (never negative)
+    
+    return {
+      walletBalance,
+      cappedUsedMoney,
+      remainingMoney,
+      totalRaised,
+      proofsSubmitted,
+      donationCount: selectedDonations.length,
+    };
+  }, [campaign?.id, donations, usedMoney]);
+  
+  // Extract values for cleaner code
+  const { walletBalance, cappedUsedMoney, remainingMoney, totalRaised, proofsSubmitted } = walletStats;
+
+  // Early returns AFTER all hooks have been called
   if (!currentUser) {
     return (
       <div className="min-h-screen flex flex-col">
@@ -993,15 +1085,6 @@ const NGODashboard = () => {
     );
   }
 
-  // Calculate wallet stats for selected NGO
-  const selectedDonations = donations.filter(d => d.campaignId === campaign?.id || !campaign);
-  const totalRaised = selectedDonations.reduce((sum, d) => sum + d.amount, 0);
-  const proofsSubmitted = selectedDonations.filter((d) => d.proofSubmitted).length;
-  const walletBalance = totalRaised; // Total money recorded/received
-  // Ensure used money never exceeds wallet balance
-  const cappedUsedMoney = Math.min(usedMoney, walletBalance);
-  const remainingMoney = Math.max(0, walletBalance - cappedUsedMoney); // Money received but not yet justified (never negative)
-
   const formatDate = (timestamp: any) => {
     if (!timestamp) return "N/A";
     if (timestamp.toDate) {
@@ -1038,7 +1121,7 @@ const NGODashboard = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {allCampaigns.map((camp) => {
                 const campDonations = donations.filter(d => d.campaignId === camp.id);
-                const campTotal = campDonations.reduce((sum, d) => sum + d.amount, 0);
+                const campTotal = campDonations.reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
                 const isSelected = selectedCampaignId === camp.id;
                 
                 return (
