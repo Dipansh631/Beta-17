@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { db } from "@/integrations/firebase/config";
+import { collection, doc, setDoc, addDoc, serverTimestamp } from "firebase/firestore";
 import axios from "axios";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,18 +19,8 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Upload,
-  Camera,
   CheckCircle2,
-  X,
   Plus,
   ArrowLeft,
   ArrowRight,
@@ -36,6 +28,7 @@ import {
   Check,
   User,
   FileText,
+  X,
 } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
@@ -61,14 +54,11 @@ interface FundingCondition {
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
-// Use proxy in development (Vite proxy)
+// Get API URL - always use full URL to avoid proxy issues
 const getApiUrl = (endpoint: string) => {
-  // In development, use Vite proxy (/api goes to http://localhost:3000/api)
-  // In production, use full URL
-  if (import.meta.env.DEV) {
-    return endpoint; // Use relative URL for proxy
-  }
-  return `${API_BASE_URL}${endpoint}`;
+  // Always use full URL with backend port 3000
+  const baseUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+  return `${baseUrl}${endpoint}`;
 };
 
 const RegisterNGO = () => {
@@ -94,16 +84,11 @@ const RegisterNGO = () => {
   const [idConfirmed, setIdConfirmed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Step 2: Face Verification
+  // Step 2: Profile Photo
   const [facePhoto, setFacePhoto] = useState<string | null>(null);
   const [faceVerified, setFaceVerified] = useState(false);
   const [verifying, setVerifying] = useState(false);
-  const [cameraActive, setCameraActive] = useState(false);
-  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const profilePhotoInputRef = useRef<HTMLInputElement>(null);
 
   // Step 3: NGO Details
   const [ngoName, setNgoName] = useState("");
@@ -136,7 +121,7 @@ const RegisterNGO = () => {
 
     // Show preview for images
     if (file.type.startsWith("image/")) {
-      const reader = new FileReader();
+        const reader = new FileReader();
       reader.onload = (e) => {
         setIdPreview(e.target?.result as string);
       };
@@ -156,11 +141,11 @@ const RegisterNGO = () => {
       console.log('   File Size:', file.size, 'bytes');
       console.log('   User:', currentUser.uid);
       
-      toast({
+              toast({
         title: "📤 Uploading file...",
         description: "Please wait while we upload your file to MongoDB.",
-      });
-
+            });
+            
       // Upload file to backend (MongoDB)
       let fileUrl: string;
       
@@ -186,7 +171,7 @@ const RegisterNGO = () => {
           console.log('✅ File uploaded to MongoDB successfully');
           console.log('📄 File URL:', fileUrl);
           console.log('🆔 File ID:', uploadResponse.data.data.fileId);
-        } else {
+            } else {
           throw new Error(uploadResponse.data.message || "Failed to upload file");
         }
       } catch (uploadError: any) {
@@ -209,6 +194,12 @@ const RegisterNGO = () => {
         description: "Using AI to extract ID details. This may take 10-30 seconds.",
       });
 
+      console.log('📤 Sending to extract-id:', {
+        fileUrl: fileUrl,
+        fileName: file.name,
+        fileType: file.type,
+      });
+
       const response = await axios.post(
         getApiUrl('/api/extract-id'),
         {
@@ -226,18 +217,25 @@ const RegisterNGO = () => {
 
       if (response.data.success && response.data.data) {
         setIdData(response.data.data);
-        toast({
+      toast({
           title: "✅ Extraction successful",
           description: "ID details extracted successfully. Please verify and confirm.",
-        });
+      });
       } else {
         throw new Error(response.data.message || "Failed to extract ID data");
       }
     } catch (err: any) {
       console.error("ID extraction error:", err);
+      console.error("Error response:", err.response?.data);
+      console.error("Error details:", err.response?.data?.error);
       
       // Provide user-friendly error messages
       let errorMsg = "Failed to extract ID information";
+      
+      // Show detailed error in development
+      if (err.response?.data?.error) {
+        console.error("Detailed error:", JSON.stringify(err.response.data.error, null, 2));
+      }
       
       if (err.message?.includes('timeout')) {
         errorMsg = "❌ Request timed out. Please try again with a smaller file.";
@@ -270,141 +268,145 @@ const RegisterNGO = () => {
     }
   };
 
-  // Step 2: Camera functions
-  const isMobileDevice = () => {
-    return (
-      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-        navigator.userAgent
-      ) || (window.matchMedia && window.matchMedia("(max-width: 768px)").matches)
-    );
-  };
-
-  const openCamera = async () => {
-    const isMobile = isMobileDevice();
-
-    if (isMobile) {
-      if (cameraInputRef.current) {
-        cameraInputRef.current.click();
-      }
-    } else {
-      try {
-        setError("");
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
-        });
-        streamRef.current = stream;
-        setCameraActive(true);
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      } catch (err) {
-        setError("Failed to access camera. Please allow camera permissions.");
-      }
-    }
-  };
-
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-    setCameraActive(false);
-  };
-
-  const capturePhoto = () => {
-    if (!videoRef.current) return;
-
-    const canvas = document.createElement("canvas");
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.drawImage(videoRef.current, 0, 0);
-      const dataUrl = canvas.toDataURL("image/jpeg");
-      setCapturedPhoto(dataUrl);
-      stopCamera();
-      setShowConfirmDialog(true);
-    }
-  };
-
-  const handleCameraCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Step 2: Profile Photo Upload
+  const handleProfilePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const imageData = e.target?.result as string;
-      setCapturedPhoto(imageData);
-      setShowConfirmDialog(true);
-    };
-    reader.readAsDataURL(file);
-
-    if (cameraInputRef.current) {
-      cameraInputRef.current.value = "";
+    // Validate file type
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "❌ Invalid file type",
+        description: "Please select an image file (JPG, PNG, etc.).",
+        variant: "destructive",
+      });
+      if (profilePhotoInputRef.current) {
+        profilePhotoInputRef.current.value = "";
+      }
+      return;
     }
-  };
 
-  const confirmPhoto = async () => {
-    if (!capturedPhoto) return;
+    // Validate file size (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      toast({
+        title: "❌ File too large",
+        description: "Image must be less than 10MB. Please select a smaller image.",
+        variant: "destructive",
+      });
+      if (profilePhotoInputRef.current) {
+        profilePhotoInputRef.current.value = "";
+      }
+      return;
+    }
 
-    setShowConfirmDialog(false);
-    setFacePhoto(capturedPhoto);
-    setVerifying(true);
+    // Validate minimum file size (at least 1KB)
+    if (file.size < 1024) {
+      toast({
+        title: "❌ File too small",
+        description: "The image file is too small. Please select a valid image.",
+        variant: "destructive",
+      });
+      if (profilePhotoInputRef.current) {
+        profilePhotoInputRef.current.value = "";
+      }
+      return;
+    }
+
     setError("");
+    setVerifying(true);
 
     try {
-      const response = await axios.post(
-        getApiUrl('/api/verify-face'),
-        { image: capturedPhoto },
-        {
-          headers: {
-            "Content-Type": "application/json",
-          },
+      // Read file as base64
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const imageData = e.target?.result as string;
+        if (!imageData || imageData.length < 100) {
+          toast({
+            title: "❌ Invalid image data",
+            description: "The image data is corrupted. Please try again.",
+            variant: "destructive",
+          });
+          setVerifying(false);
+          return;
         }
-      );
 
-      if (response.data.success && response.data.status === "Verified") {
-        setFaceVerified(true);
+        console.log('📸 Photo selected:', {
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type,
+          dataUrlLength: imageData.length,
+        });
+
+        // Upload profile photo to MongoDB
+        const response = await axios.post(
+          getApiUrl('/api/verify-face'),
+          { image: imageData },
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        if (response.data.success) {
+          // Store the MongoDB file URL
+          if (response.data.faceImageUrl) {
+            setFacePhoto(response.data.faceImageUrl);
+          } else {
+            // Fallback to base64 if URL not provided
+            setFacePhoto(imageData);
+          }
+          setFaceVerified(true);
         toast({
-          title: "✅ Face verified",
-          description: "Your face has been verified successfully.",
+            title: "✅ Photo saved",
+            description: "Your profile photo has been saved successfully.",
         });
       } else {
-        setFaceVerified(false);
-        setFacePhoto(null);
+          setFaceVerified(false);
+          setFacePhoto(null);
         toast({
-          title: "❌ Verification failed",
-          description: "Face verification failed. Please retake the photo.",
+            title: "❌ Failed to save photo",
+            description: response.data.message || "Please try again.",
+            variant: "destructive",
+      });
+        }
+      };
+
+      reader.onerror = () => {
+        toast({
+          title: "❌ Failed to read file",
+          description: "Could not read the image file. Please try again.",
           variant: "destructive",
         });
-      }
+        setVerifying(false);
+      };
+
+      reader.readAsDataURL(file);
     } catch (err: any) {
-      console.error("Face verification error:", err);
-      const errorMsg = err.response?.data?.message || err.message || "Failed to verify face";
+      console.error("Profile photo upload error:", err);
+      const errorMsg = err.response?.data?.message || err.message || "Failed to upload profile photo";
       setError(errorMsg);
       setFaceVerified(false);
       setFacePhoto(null);
-      toast({
-        title: "❌ Verification failed",
+        toast({
+        title: "❌ Failed to upload photo",
         description: errorMsg,
-        variant: "destructive",
-      });
+          variant: "destructive",
+        });
     } finally {
       setVerifying(false);
-      setCapturedPhoto(null);
+      if (profilePhotoInputRef.current) {
+        profilePhotoInputRef.current.value = "";
+      }
     }
   };
 
-  const retakePhoto = () => {
-    setShowConfirmDialog(false);
-    setCapturedPhoto(null);
+  const removePhoto = () => {
     setFacePhoto(null);
     setFaceVerified(false);
-    openCamera();
+    if (profilePhotoInputRef.current) {
+      profilePhotoInputRef.current.value = "";
+    }
   };
 
   // Step 3: Add funding condition
@@ -443,8 +445,13 @@ const RegisterNGO = () => {
       return;
     }
 
-    if (!idConfirmed || !faceVerified) {
-      setError("Please complete ID verification and face verification");
+    if (!idConfirmed) {
+      setError("Please complete ID verification");
+      return;
+    }
+
+    if (!faceVerified) {
+      setError("Please capture and confirm your profile photo");
       return;
     }
 
@@ -462,12 +469,13 @@ const RegisterNGO = () => {
     setError("");
 
     try {
-      // Upload profile photo if exists
-      let profilePhotoUrl = "";
-      if (facePhoto) {
-        // In production, upload to Firebase Storage first
-        // For now, we'll use base64 or upload URL
-        profilePhotoUrl = facePhoto;
+      // Profile photo is already in MongoDB (uploaded during face verification)
+      // Use the MongoDB URL directly
+      let profilePhotoUrl = facePhoto || "";
+      
+      // If it's a relative MongoDB URL, convert to full URL
+      if (profilePhotoUrl && profilePhotoUrl.startsWith('/api/file/')) {
+        profilePhotoUrl = getApiUrl(profilePhotoUrl);
       }
 
       const response = await axios.post(
@@ -489,12 +497,12 @@ const RegisterNGO = () => {
             contact_email: contactEmail || currentUser.email || "",
             contact_phone: contactPhone,
           },
-          conditions: conditions.map((c) => ({
-            title: c.title,
-            description: c.description,
+        conditions: conditions.map((c) => ({
+          title: c.title,
+          description: c.description,
             fund_estimate: parseFloat(c.fund_estimate) || 0,
-            priority: c.priority,
-          })),
+          priority: c.priority,
+        })),
           profilePhotoUrl,
         },
         {
@@ -505,14 +513,64 @@ const RegisterNGO = () => {
       );
 
       if (response.data.success) {
-        toast({
-          title: "🎉 Registration successful!",
-          description: "Your NGO registration is pending verification.",
-        });
+        // Save NGO to Firestore so it appears in BrowseCampaigns
+        // Use addDoc to generate unique ID for each NGO (allows multiple NGOs per user)
+        try {
+          const ngoData = {
+            owner_uid: currentUser.uid, // Store owner's UID for reference
+            owner_email: contactEmail || currentUser.email || "", // Store owner's email
+            profile: {
+              name: idData.name,
+              dob: idData.dob,
+              gender: idData.gender,
+              address: idData.address,
+              id_number: idData.id_number,
+              id_type: idData.id_type,
+              verified: true, // Auto-verified for now
+              profile_photo_url: profilePhotoUrl || "",
+            },
+            details: {
+              ngo_name: ngoName,
+              description: ngoDescription,
+              donation_category: donationCategory,
+              contact_email: contactEmail || currentUser.email || "",
+              contact_phone: contactPhone,
+            },
+            conditions: conditions.map((c) => ({
+              title: c.title,
+              description: c.description,
+              fund_estimate: parseFloat(c.fund_estimate) || 0,
+              priority: c.priority,
+            })),
+            status: "active", // Set as active to show in BrowseCampaigns
+            total_raised: 0, // Initialize total_raised
+            total_goal: conditions.reduce((sum, c) => sum + (parseFloat(c.fund_estimate) || 0), 0), // Calculate total goal
+            created_at: serverTimestamp(),
+            updated_at: serverTimestamp(),
+          };
+          
+          // Use addDoc to generate unique ID - allows multiple NGOs per user
+          const ngoDocRef = await addDoc(collection(db, "ngos"), ngoData);
 
-        setTimeout(() => {
-          navigate("/");
-        }, 2000);
+          toast({
+            title: "🎉 Registration successful!",
+            description: "Your NGO is now active and visible in campaigns.",
+          });
+
+          setTimeout(() => {
+            navigate("/campaigns");
+          }, 2000);
+        } catch (firestoreError: any) {
+          console.error("Error saving to Firestore:", firestoreError);
+          // Still show success but warn about Firestore sync
+          toast({
+            title: "🎉 Registration successful!",
+            description: "NGO registered in MongoDB. Refreshing campaigns page...",
+          });
+          setTimeout(() => {
+            navigate("/campaigns");
+          }, 2000);
+        }
       } else {
         throw new Error(response.data.message || "Failed to register NGO");
       }
@@ -537,7 +595,7 @@ const RegisterNGO = () => {
       return;
     }
     if (currentStep === 2 && !faceVerified) {
-      setError("Please complete face verification");
+      setError("Please capture and confirm your profile photo");
       return;
     }
     if (currentStep < 3) {
@@ -553,11 +611,7 @@ const RegisterNGO = () => {
     }
   };
 
-  useEffect(() => {
-    return () => {
-      stopCamera();
-    };
-  }, []);
+  // No cleanup needed for gallery upload
 
   return (
     <div className="min-h-screen flex flex-col bg-white">
@@ -599,12 +653,12 @@ const RegisterNGO = () => {
             <CardTitle className="text-2xl">
               Step {currentStep} of 3:{" "}
               {currentStep === 1 && "Upload ID Card"}
-              {currentStep === 2 && "Face Verification"}
+              {currentStep === 2 && "Profile Photo"}
               {currentStep === 3 && "NGO Details"}
             </CardTitle>
             <CardDescription>
               {currentStep === 1 && "Upload your Aadhaar or PAN card for verification"}
-              {currentStep === 2 && "Capture a live photo for face verification"}
+              {currentStep === 2 && "Capture a live photo for your profile picture"}
               {currentStep === 3 && "Enter your NGO details and funding conditions"}
             </CardDescription>
           </CardHeader>
@@ -766,64 +820,59 @@ const RegisterNGO = () => {
                         Confirm this information is correct
                       </Label>
                     </div>
+                    </div>
+                )}
                   </div>
                 )}
-              </div>
-            )}
 
-            {/* Step 2: Face Verification */}
+            {/* Step 2: Profile Photo */}
             {currentStep === 2 && (
               <div className="space-y-6">
                 <div>
                   <Label className="text-base font-semibold mb-2 block">
-                    Capture Live Photo
+                    Upload Profile Photo
                   </Label>
-
-                  <Input
-                    ref={cameraInputRef}
-                    type="file"
-                    accept="image/*"
-                    capture="user"
-                    onChange={handleCameraCapture}
-                    className="hidden"
-                  />
 
                   {!facePhoto ? (
                     <div className="space-y-4">
-                      {!cameraActive ? (
-                        <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
-                          <Camera className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-                          <p className="text-sm text-gray-600 mb-4">
-                            Click below to open your camera and capture a photo
-                          </p>
-                          <Button onClick={openCamera} variant="outline" className="w-full">
-                            <Camera className="mr-2 h-4 w-4" />
-                            Open Camera
-                          </Button>
-                          <p className="text-xs text-gray-500 mt-3">
-                            This will open your device camera directly
-                          </p>
+                      {verifying ? (
+                        <div className="border border-gray-200 rounded-lg p-4 space-y-3">
+                          <div className="flex items-center gap-3">
+                            <Loader2 className="w-5 h-5 animate-spin text-black" />
+                            <div>
+                              <h3 className="font-semibold">Uploading Photo...</h3>
+                              <p className="text-xs text-gray-500">
+                                Saving your profile photo. Please wait...
+                              </p>
+                          </div>
+                          </div>
                         </div>
                       ) : (
-                        <div className="space-y-4">
-                          <div className="border border-gray-200 rounded-lg overflow-hidden">
-                            <video
-                              ref={videoRef}
-                              autoPlay
-                              playsInline
-                              className="w-full h-64 object-cover"
-                            />
-                          </div>
-                          <div className="flex gap-2">
-                            <Button onClick={capturePhoto} className="flex-1">
-                              <Camera className="mr-2 h-4 w-4" />
-                              Capture Photo
+                        <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
+                          <Upload className="w-16 h-16 mx-auto mb-4 text-gray-400" />
+                          <p className="text-sm text-gray-600 mb-4">
+                            Upload a photo from your gallery
+                          </p>
+                          <Label htmlFor="profile-photo-upload" className="cursor-pointer">
+                            <Button variant="outline" asChild>
+                              <span>
+                                <Upload className="mr-2 h-4 w-4" />
+                                Choose Photo from Gallery
+                              </span>
                             </Button>
-                            <Button onClick={stopCamera} variant="outline">
-                              Cancel
-                            </Button>
-                          </div>
-                        </div>
+                          </Label>
+                        <Input
+                            id="profile-photo-upload"
+                            ref={profilePhotoInputRef}
+                          type="file"
+                          accept="image/*"
+                            onChange={handleProfilePhotoUpload}
+                            className="hidden"
+                        />
+                          <p className="text-xs text-gray-500 mt-3">
+                            Supported formats: JPG, PNG, WebP (Max 10MB)
+                          </p>
+                      </div>
                       )}
                     </div>
                   ) : (
@@ -833,9 +882,9 @@ const RegisterNGO = () => {
                           <div className="flex items-center gap-3">
                             <Loader2 className="w-5 h-5 animate-spin text-black" />
                             <div>
-                              <h3 className="font-semibold">Verifying Face...</h3>
+                              <h3 className="font-semibold">Saving Photo...</h3>
                               <p className="text-xs text-gray-500">
-                                Analyzing photo with AI. This may take 5-10 seconds.
+                                Saving your profile photo. Please wait...
                               </p>
                             </div>
                           </div>
@@ -846,33 +895,23 @@ const RegisterNGO = () => {
                         <div className="border border-green-200 rounded-lg p-4 bg-green-50">
                           <div className="flex items-center gap-2">
                             <CheckCircle2 className="w-5 h-5 text-green-600" />
-                            <h3 className="font-semibold text-green-800">Face Verified</h3>
+                            <h3 className="font-semibold text-green-800">Profile Photo Saved</h3>
                           </div>
                           <p className="text-sm text-green-700 mt-1">
-                            Your face has been verified successfully.
+                            Your profile photo has been saved successfully.
                           </p>
                         </div>
                       )}
 
-                      {!faceVerified && !verifying && facePhoto && (
+                      {!faceVerified && !verifying && (
                         <div className="space-y-4">
-                          <img
-                            src={facePhoto}
-                            alt="Profile"
-                            className="w-48 h-48 mx-auto rounded-lg shadow-sm object-cover"
-                          />
-                          <Button
-                            variant="outline"
-                            onClick={() => {
-                              setFacePhoto(null);
-                              setFaceVerified(false);
-                              openCamera();
-                            }}
-                            className="w-full"
-                          >
-                            <X className="mr-2 h-4 w-4" />
-                            Retake Photo
-                          </Button>
+                          <div className="flex justify-center">
+                            <img
+                              src={facePhoto.startsWith('/api/file/') ? getApiUrl(facePhoto) : facePhoto}
+                        alt="Profile"
+                              className="w-48 h-48 rounded-lg shadow-sm object-cover"
+                      />
+                      </div>
                         </div>
                       )}
                     </div>
@@ -1089,36 +1128,6 @@ const RegisterNGO = () => {
       </div>
       <Footer />
 
-      {/* Photo Confirmation Dialog */}
-      <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Confirm Photo</DialogTitle>
-            <DialogDescription>
-              Please review your captured photo. Do you want to use this for verification?
-            </DialogDescription>
-          </DialogHeader>
-          {capturedPhoto && (
-            <div className="flex justify-center py-4">
-              <img
-                src={capturedPhoto}
-                alt="Captured photo"
-                className="w-64 h-64 rounded-lg shadow-sm object-cover"
-              />
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={retakePhoto}>
-              <X className="mr-2 h-4 w-4" />
-              Retake
-            </Button>
-            <Button onClick={confirmPhoto}>
-              <Check className="mr-2 h-4 w-4" />
-              Confirm & Verify
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 };

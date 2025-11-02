@@ -1,55 +1,168 @@
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import CampaignCard from "@/components/CampaignCard";
-import { ArrowRight, Shield, Eye, Zap, CheckCircle2 } from "lucide-react";
+import { ArrowRight, Shield, Eye, Zap, CheckCircle2, Trophy, Users, Loader2 } from "lucide-react";
+import { db } from "@/integrations/firebase/config";
+import { collection, query, orderBy, limit, getDocs, where } from "firebase/firestore";
 import heroImage from "@/assets/hero-image.jpg";
-import disasterIcon from "@/assets/disaster-relief-icon.png";
-import educationIcon from "@/assets/education-icon.png";
-import environmentIcon from "@/assets/environment-icon.png";
 
-const featuredCampaigns = [
-  {
-    id: "1",
-    title: "Kerala Flood Relief 2025",
-    organization: "Disaster Response India",
-    description: "Emergency relief supplies and rebuilding support for flood-affected families in Kerala.",
-    raised: 2450000,
-    goal: 5000000,
-    conditions: 4,
-    verified: true,
-    category: "Disaster Relief",
-    image: disasterIcon,
-  },
-  {
-    id: "2",
-    title: "Rural School Digital Library Project",
-    organization: "Education For All Foundation",
-    description: "Setting up digital libraries with tablets and e-learning resources in 50 rural schools.",
-    raised: 1890000,
-    goal: 3000000,
-    conditions: 3,
-    verified: true,
-    category: "Education",
-    image: educationIcon,
-  },
-  {
-    id: "3",
-    title: "Western Ghats Reforestation Drive",
-    organization: "Green Earth Collective",
-    description: "Plant 100,000 native trees to restore biodiversity in degraded Western Ghats forest areas.",
-    raised: 890000,
-    goal: 2000000,
-    conditions: 5,
-    verified: true,
-    category: "Environment",
-    image: environmentIcon,
-  },
-];
+interface TopDonor {
+  uid: string;
+  displayName: string;
+  email: string;
+  totalDonated: number;
+  donationCount: number;
+  rank: string;
+}
+
+interface FeaturedCampaign {
+  id: string;
+  title: string;
+  organization: string;
+  description: string;
+  raised: number;
+  goal: number;
+  conditions: number;
+  verified: boolean;
+  category: string;
+  image: string;
+}
 
 const Home = () => {
+  const [topDonors, setTopDonors] = useState<TopDonor[]>([]);
+  const [loadingDonors, setLoadingDonors] = useState(true);
+  const [featuredCampaigns, setFeaturedCampaigns] = useState<FeaturedCampaign[]>([]);
+  const [loadingCampaigns, setLoadingCampaigns] = useState(true);
+
+  useEffect(() => {
+    const fetchTopDonors = async () => {
+      try {
+        setLoadingDonors(true);
+        const usersQuery = query(
+          collection(db, "users"),
+          orderBy("totalDonated", "desc"),
+          limit(10)
+        );
+        const snapshot = await getDocs(usersQuery);
+        const donors: TopDonor[] = [];
+        
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          if (data.totalDonated > 0) {
+            donors.push({
+              uid: doc.id,
+              displayName: data.displayName || data.email?.split("@")[0] || "Anonymous",
+              email: data.email || "",
+              totalDonated: data.totalDonated || 0,
+              donationCount: data.donationCount || 0,
+              rank: data.rank || "Bronze",
+            });
+          }
+        });
+        
+        setTopDonors(donors);
+      } catch (error) {
+        console.error("Error fetching top donors:", error);
+      } finally {
+        setLoadingDonors(false);
+      }
+    };
+
+    fetchTopDonors();
+  }, []);
+
+  useEffect(() => {
+    const fetchFeaturedCampaigns = async () => {
+      try {
+        setLoadingCampaigns(true);
+        // Fetch all active NGOs (not just verified ones) so newly registered NGOs appear
+        const ngosQuery = query(collection(db, "ngos"));
+        const ngosSnapshot = await getDocs(ngosQuery);
+        
+        const campaigns: FeaturedCampaign[] = [];
+        
+        for (const docSnap of ngosSnapshot.docs) {
+          const data = docSnap.data();
+          
+          // Skip if NGO doesn't have required data (details and conditions)
+          if (!data.details?.ngo_name || !data.conditions || data.conditions.length === 0) {
+            continue;
+          }
+          
+          // Calculate total goal
+          const totalGoal = data.conditions?.reduce((sum: number, cond: any) => sum + (cond.fund_estimate || 0), 0) || 0;
+          
+          // Fetch donations for this campaign
+          const donationsQuery = query(
+            collection(db, "donations"),
+            where("campaignId", "==", docSnap.id)
+          );
+          const donationsSnapshot = await getDocs(donationsQuery);
+          const campaignDonations = donationsSnapshot.docs.map(doc => doc.data());
+          
+          // Calculate total raised
+          const totalRaised = campaignDonations.reduce((sum, d) => sum + (d.amount || 0), 0);
+          
+          // Only include active campaigns (where total_raised < total_goal)
+          // Also handle case where total_goal is 0 (no goal set)
+          if (totalGoal === 0 || totalRaised < totalGoal) {
+            // Get default icon based on category
+            let defaultIcon = "/api/placeholder/400/300";
+            const category = data.details?.donation_category?.toLowerCase() || "";
+            if (category.includes("disaster") || category.includes("flood")) {
+              defaultIcon = "https://via.placeholder.com/400x300/FF6B6B/FFFFFF?text=Disaster+Relief";
+            } else if (category.includes("education") || category.includes("school")) {
+              defaultIcon = "https://via.placeholder.com/400x300/4ECDC4/FFFFFF?text=Education";
+            } else if (category.includes("environment") || category.includes("green")) {
+              defaultIcon = "https://via.placeholder.com/400x300/95E1D3/FFFFFF?text=Environment";
+            } else {
+              defaultIcon = "https://via.placeholder.com/400x300/AA96DA/FFFFFF?text=NGO";
+            }
+            
+            campaigns.push({
+              id: docSnap.id,
+              title: data.details?.ngo_name || "Untitled Campaign",
+              organization: data.details?.ngo_name || "Unknown Organization",
+              description: data.details?.description || "No description available",
+              raised: totalRaised,
+              goal: totalGoal || 0,
+              conditions: data.conditions?.length || 0,
+              verified: data.profile?.verified || false,
+              category: data.details?.donation_category || "General",
+              image: defaultIcon,
+            });
+          }
+        }
+        
+        // Sort by raised amount (descending) and limit to 3
+        campaigns.sort((a, b) => b.raised - a.raised);
+        setFeaturedCampaigns(campaigns.slice(0, 3));
+      } catch (error) {
+        console.error("Error fetching featured campaigns:", error);
+      } finally {
+        setLoadingCampaigns(false);
+      }
+    };
+
+    fetchFeaturedCampaigns();
+  }, []);
+
+  const getRankDisplay = (rank: string) => {
+    const rankMap: Record<string, { label: string; color: string; icon: string }> = {
+      Bronze: { label: "Bronze", color: "bg-amber-600", icon: "🥉" },
+      Silver: { label: "Silver", color: "bg-gray-400", icon: "🥈" },
+      Gold: { label: "Gold", color: "bg-yellow-500", icon: "🥇" },
+      Diamond: { label: "Diamond", color: "bg-cyan-400", icon: "💎" },
+    };
+
+    return rankMap[rank] || { label: rank, color: "bg-gray-400", icon: "🏆" };
+  };
+
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar />
@@ -126,6 +239,28 @@ const Home = () => {
         </div>
       </section>
 
+      {/* CTA Section */}
+      <section className="py-20">
+        <div className="container mx-auto px-4">
+          <Card className="p-12 gradient-accent text-accent-foreground text-center shadow-soft">
+            <h2 className="font-heading text-4xl font-bold mb-4">
+              Ready to Make a Difference?
+            </h2>
+            <p className="text-lg mb-8 opacity-90 max-w-2xl mx-auto">
+              Join thousands of donors who trust DonateFlow for transparent, verified giving
+            </p>
+            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+              <Button size="lg" variant="secondary" asChild className="text-lg px-8">
+                <Link to="/campaigns">Start Donating</Link>
+              </Button>
+              <Button size="lg" variant="outline" asChild className="text-lg px-8 bg-accent-foreground/10 border-accent-foreground/20 hover:bg-accent-foreground/20">
+                <Link to="/register-ngo">Register as NGO</Link>
+              </Button>
+            </div>
+          </Card>
+        </div>
+      </section>
+
       {/* Featured Campaigns */}
       <section className="py-20">
         <div className="container mx-auto px-4">
@@ -137,11 +272,21 @@ const Home = () => {
               Verified NGOs with specific funding conditions
             </p>
           </div>
-          <div className="grid md:grid-cols-3 gap-8 mb-8">
-            {featuredCampaigns.map((campaign) => (
-              <CampaignCard key={campaign.id} campaign={campaign} />
-            ))}
-          </div>
+          {loadingCampaigns ? (
+            <div className="flex justify-center items-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-accent" />
+            </div>
+          ) : featuredCampaigns.length > 0 ? (
+            <div className="grid md:grid-cols-3 gap-8 mb-8">
+              {featuredCampaigns.map((campaign) => (
+                <CampaignCard key={campaign.id} campaign={campaign} />
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-12">
+              <p className="text-muted-foreground">No active campaigns available at the moment.</p>
+            </div>
+          )}
           <div className="text-center">
             <Button size="lg" variant="outline" asChild>
               <Link to="/campaigns">
@@ -152,8 +297,87 @@ const Home = () => {
         </div>
       </section>
 
-      {/* How It Works */}
+      {/* Top Donors Section */}
       <section className="py-20 bg-secondary/30">
+        <div className="container mx-auto px-4">
+          <div className="text-center mb-12">
+            <h2 className="font-heading text-4xl font-bold mb-4">
+              Top Donors
+            </h2>
+            <p className="text-lg text-muted-foreground">
+              Recognizing our generous supporters who make a real difference
+            </p>
+          </div>
+          {loadingDonors ? (
+            <div className="flex justify-center items-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-accent" />
+            </div>
+          ) : topDonors.length > 0 ? (
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {topDonors.map((donor, index) => {
+                const rankDisplay = getRankDisplay(donor.rank);
+                return (
+                  <Card key={donor.uid} className="hover:shadow-lg transition-shadow">
+                    <CardHeader>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className={`${rankDisplay.color} text-white rounded-full w-12 h-12 flex items-center justify-center text-xl`}>
+                          {rankDisplay.icon}
+                        </div>
+                        <Badge variant="outline" className="text-sm">
+                          #{index + 1}
+                        </Badge>
+                      </div>
+                      <CardTitle className="text-xl mb-2">
+                        {donor.displayName}
+                      </CardTitle>
+                      <CardDescription>
+                        {donor.email}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-gray-600">Total Donated</span>
+                          <span className="text-lg font-bold text-black">
+                            ₹{donor.totalDonated.toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-gray-600">Donations</span>
+                          <span className="text-sm font-semibold text-black">
+                            {donor.donationCount} {donor.donationCount === 1 ? "donation" : "donations"}
+                          </span>
+                        </div>
+                        <div className="pt-2 border-t">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm text-gray-600">Rank</span>
+                            <Badge className={`${rankDisplay.color} text-white`}>
+                              {rankDisplay.label}
+                            </Badge>
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          ) : (
+            <Card>
+              <CardContent className="p-12 text-center">
+                <Users className="h-16 w-16 mx-auto text-gray-300 mb-4" />
+                <h3 className="text-xl font-semibold text-black mb-2">No top donors yet</h3>
+                <p className="text-gray-600">
+                  Be the first to make a donation and appear on our leaderboard!
+                </p>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </section>
+
+      {/* How It Works */}
+      <section className="py-20">
         <div className="container mx-auto px-4">
           <div className="text-center mb-12">
             <h2 className="font-heading text-4xl font-bold mb-4">
@@ -173,7 +397,7 @@ const Home = () => {
               {
                 step: "2",
                 title: "Make Payment",
-                description: "Donate securely via Razorpay. Funds go directly to the NGO",
+                description: "Donate securely. Funds go directly to the NGO",
               },
               {
                 step: "3",
@@ -195,28 +419,6 @@ const Home = () => {
               </div>
             ))}
           </div>
-        </div>
-      </section>
-
-      {/* CTA Section */}
-      <section className="py-20">
-        <div className="container mx-auto px-4">
-          <Card className="p-12 gradient-accent text-accent-foreground text-center shadow-soft">
-            <h2 className="font-heading text-4xl font-bold mb-4">
-              Ready to Make a Difference?
-            </h2>
-            <p className="text-lg mb-8 opacity-90 max-w-2xl mx-auto">
-              Join thousands of donors who trust DonateFlow for transparent, verified giving
-            </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Button size="lg" variant="secondary" asChild className="text-lg px-8">
-                <Link to="/campaigns">Start Donating</Link>
-              </Button>
-              <Button size="lg" variant="outline" asChild className="text-lg px-8 bg-accent-foreground/10 border-accent-foreground/20 hover:bg-accent-foreground/20">
-                <Link to="/register-ngo">Register as NGO</Link>
-              </Button>
-            </div>
-          </Card>
         </div>
       </section>
 

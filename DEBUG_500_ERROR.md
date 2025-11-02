@@ -1,64 +1,89 @@
-# Debugging 500 Internal Server Error
+# 🔍 Debugging 500 Error in extract-id
 
-## Steps to Debug
+## Issue
+Getting 500 Internal Server Error when calling `/api/extract-id`
 
-### 1. Check Backend Console Logs
+## Enhanced Error Logging Added
 
-The backend server should show detailed error logs. Look for:
-- `❌ Error in extractId:`
-- `PDF.co Upload Error:`
-- `PDF.co OCR Error:`
+I've added detailed logging to help identify the exact error:
 
-### 2. Common Causes
+### Backend Logs
+The backend will now log:
+- ✅ Request details (fileUrl, fileName, fileType)
+- ✅ MongoDB download progress
+- ✅ PDF.co API calls and responses
+- ✅ Gemini API calls and responses
+- ✅ Full error stack traces
 
-#### A. PDF.co API Key Issue
-- Check if API key is correct in `backend/.env`
-- Verify API key format: `email_apiKey`
-- Check PDF.co account has credits
+### Frontend Logs
+The frontend will now log:
+- ✅ Request being sent to backend
+- ✅ Full error response from backend
+- ✅ Detailed error object in development mode
 
-#### B. PDF.co API Endpoint Issue
-- The OCR endpoint might be different
-- Try testing the API key directly
+## How to Debug
 
-#### C. File Upload Issue
-- Check file size (should be < 10MB)
-- Check file format (JPG, PNG, PDF)
-- Verify multer is handling the file correctly
+### Step 1: Check Backend Console
 
-### 3. Test PDF.co API Directly
-
-You can test if PDF.co API is working:
-
-```bash
-# Test with curl (replace with your actual file and key)
-curl -X POST "https://api.pdf.co/v1/file/upload" \
-  -H "x-api-key: YOUR_API_KEY" \
-  -F "file=@test-image.jpg"
+When you upload a file, watch the backend terminal for:
+```
+📥 Received extract-id request: { fileUrl: '...', fileName: '...', fileType: '...' }
+📥 Downloading file from MongoDB...
+✅ File downloaded from MongoDB: X bytes
+🔍 Step 1: Extracting text using PDF.co OCR...
 ```
 
-### 4. Check Backend Logs
+**Look for error messages** - they will show exactly where it fails:
+- ❌ MongoDB download error
+- ❌ PDF.co OCR Error
+- ❌ Gemini AI Error
 
-After uploading a file, check the backend terminal for:
+### Step 2: Check Frontend Console
+
+Open browser DevTools (F12) → Console tab
+
+You'll see:
 ```
-📤 Uploading file to PDF.co...
-PDF.co Upload Response Status: 200
-✅ File uploaded to PDF.co: https://...
-🔍 Extracting text using PDF.co OCR...
+📤 Sending to extract-id: { fileUrl: '...', fileName: '...', fileType: '...' }
 ```
 
-If you see errors here, that's where the issue is.
+Then either:
+- ✅ Success response
+- ❌ Error with full details
 
-### 5. Restart Backend with Verbose Logging
+### Step 3: Common Issues
 
-The backend now has improved error logging. Look for:
-- Detailed error messages
-- API response data
-- Stack traces (in development mode)
+#### Issue 1: File URL Format
+**Error**: "Invalid MongoDB file URL format"
+**Fix**: The fileUrl should be like `/api/file/67890abcdef1234567890123`
+
+#### Issue 2: MongoDB Not Connected
+**Error**: "MongoDB not connected"
+**Fix**: Restart backend (already done ✅)
+
+#### Issue 3: PDF.co API Error
+**Error**: "PDF.co OCR failed"
+**Possible causes**:
+- Invalid API key
+- API quota exceeded
+- File format not supported
+
+#### Issue 4: Gemini API Error
+**Error**: "Gemini AI failed"
+**Possible causes**:
+- Invalid API key
+- API quota exceeded
+- Network issue
+
+## Next Steps
+
+1. **Try uploading a file again**
+2. **Watch backend console** for detailed error messages
+3. **Check frontend console** for error details
+4. **Share the error message** you see in backend console
+
+The enhanced logging will show exactly where the 500 error is coming from!
 
 ---
 
-**Next Steps:**
-1. Check backend terminal logs
-2. Share the exact error message from backend
-3. Verify PDF.co API key is working
-
+**🎯 Action: Try uploading again and share the backend console error message**

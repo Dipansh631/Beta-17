@@ -23,7 +23,16 @@ export const connectMongoDB = async () => {
     }
 
     console.log('🔄 Connecting to MongoDB...');
-    client = new MongoClient(MONGODB_URI);
+    
+    // MongoDB connection options for better compatibility
+    const clientOptions = {
+      serverSelectionTimeoutMS: 10000, // 10 seconds timeout
+      socketTimeoutMS: 45000, // 45 seconds socket timeout
+      tls: true, // Enable TLS/SSL
+      tlsAllowInvalidCertificates: false, // Don't allow invalid certificates
+    };
+
+    client = new MongoClient(MONGODB_URI, clientOptions);
 
     await client.connect();
     db = client.db(DB_NAME);
@@ -37,7 +46,11 @@ export const connectMongoDB = async () => {
 
     return { client, db, gridFSBucket };
   } catch (error) {
-    console.error('❌ MongoDB connection error:', error);
+    console.error('❌ MongoDB connection error:', error.message);
+    console.error('   Make sure:');
+    console.error('   1. MongoDB Atlas IP whitelist includes your IP (or 0.0.0.0/0 for testing)');
+    console.error('   2. Username and password are correct');
+    console.error('   3. Connection string is valid');
     throw error;
   }
 };
@@ -61,13 +74,21 @@ export const disconnectMongoDB = async () => {
 
 /**
  * Get MongoDB instance
+ * Returns null if not connected (instead of throwing)
  */
 export const getMongoDB = () => {
-  if (!db) {
-    throw new Error('MongoDB not connected. Call connectMongoDB() first.');
+  if (!db || !gridFSBucket) {
+    return null;
   }
   return { client, db, gridFSBucket };
 };
 
-export default { connectMongoDB, disconnectMongoDB, getMongoDB };
+/**
+ * Check if MongoDB is connected
+ */
+export const isMongoDBConnected = () => {
+  return db !== null && gridFSBucket !== null;
+};
+
+export default { connectMongoDB, disconnectMongoDB, getMongoDB, isMongoDBConnected };
 

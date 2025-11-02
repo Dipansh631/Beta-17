@@ -1,17 +1,27 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useAuth } from "@/contexts/AuthContext";
+import { db } from "@/integrations/firebase/config";
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Loader2, Heart } from "lucide-react";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import { useToast } from "@/hooks/use-toast";
 
 const loginSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
@@ -24,8 +34,13 @@ const Login = () => {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
-  const { login, signInWithGoogle } = useAuth();
+  const { login, signInWithGoogle, currentUser } = useAuth();
   const navigate = useNavigate();
+  const { toast } = useToast();
+  const [showPasswordSetup, setShowPasswordSetup] = useState(false);
+  const [paymentPassword, setPaymentPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
 
   const {
     register,
@@ -40,6 +55,12 @@ const Login = () => {
       setError("");
       setLoading(true);
       await login(data.email, data.password);
+      
+      // Wait a moment for currentUser to be set, then check payment password
+      setTimeout(async () => {
+        await checkAndSetupPaymentPassword();
+      }, 500);
+      
       navigate("/");
     } catch (err: any) {
       setError(err.message || "Failed to sign in. Please check your credentials.");
@@ -48,11 +69,91 @@ const Login = () => {
     }
   };
 
+  const checkAndSetupPaymentPassword = async () => {
+    // Wait for currentUser to be available
+    let attempts = 0;
+    while (!currentUser && attempts < 10) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      attempts++;
+    }
+    
+    if (!currentUser) return;
+    
+    try {
+      const userProfileRef = doc(db, "users", currentUser.uid);
+      const userProfileDoc = await getDoc(userProfileRef);
+      
+      if (!userProfileDoc.exists() || !userProfileDoc.data().paymentPassword) {
+        // Show payment password setup dialog
+        setShowPasswordSetup(true);
+      }
+    } catch (error) {
+      console.error("Error checking payment password:", error);
+    }
+  };
+
+  const handlePaymentPasswordSetup = async () => {
+    if (!paymentPassword || paymentPassword.length < 4) {
+      setPasswordError("Password must be at least 4 characters");
+      return;
+    }
+
+    if (paymentPassword !== confirmPassword) {
+      setPasswordError("Passwords do not match");
+      return;
+    }
+
+    if (!currentUser) return;
+
+    try {
+      const userProfileRef = doc(db, "users", currentUser.uid);
+      const userProfileDoc = await getDoc(userProfileRef);
+
+      if (userProfileDoc.exists()) {
+        await setDoc(userProfileRef, {
+          paymentPassword: paymentPassword, // In production, hash this password
+          lastUpdated: serverTimestamp(),
+        }, { merge: true });
+      } else {
+        await setDoc(userProfileRef, {
+          uid: currentUser.uid,
+          email: currentUser.email,
+          displayName: currentUser.displayName,
+          paymentPassword: paymentPassword, // In production, hash this password
+          donationHistory: [],
+          totalDonated: 0,
+          donationCount: 0,
+          badges: [],
+          createdAt: serverTimestamp(),
+          lastUpdated: serverTimestamp(),
+        });
+      }
+
+      toast({
+        title: "✅ Payment Password Set",
+        description: "Your payment password has been saved successfully.",
+      });
+
+      setShowPasswordSetup(false);
+      setPaymentPassword("");
+      setConfirmPassword("");
+      setPasswordError("");
+    } catch (error: any) {
+      setPasswordError(error.message || "Failed to set payment password");
+    }
+  };
+
   const handleGoogleSignIn = async () => {
     try {
       setError("");
       setGoogleLoading(true);
       await signInWithGoogle();
+      
+      // Wait a moment for currentUser to be set
+      setTimeout(async () => {
+        await checkAndSetupPaymentPassword();
+      }, 500);
+      
       navigate("/");
     } catch (err: any) {
       setError(err.message || "Failed to sign in with Google. Please try again.");
@@ -60,6 +161,13 @@ const Login = () => {
       setGoogleLoading(false);
     }
   };
+
+  // Check payment password after user is set
+  useEffect(() => {
+    if (currentUser) {
+      checkAndSetupPaymentPassword();
+    }
+  }, [currentUser]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -182,6 +290,71 @@ const Login = () => {
           </CardFooter>
         </Card>
       </div>
+
+      {/* Payment Password Setup Dialog */}
+      <Dialog open={showPasswordSetup} onOpenChange={(open) => {
+        if (!open) {
+          // Don't allow closing until password is set
+          toast({
+            title: "Payment Password Required",
+            description: "Please set a payment password to continue.",
+            variant: "destructive",
+          });
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Set Payment Password</DialogTitle>
+            <DialogDescription>
+              For security purposes, please set a payment password. This password will be required before every donation.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <Label htmlFor="payment-password-setup">Payment Password</Label>
+              <Input
+                id="payment-password-setup"
+                type="password"
+                value={paymentPassword}
+                onChange={(e) => {
+                  setPaymentPassword(e.target.value);
+                  setPasswordError("");
+                }}
+                placeholder="Enter payment password (min 4 characters)"
+                className="mt-2"
+              />
+            </div>
+            <div>
+              <Label htmlFor="confirm-password-setup">Confirm Password</Label>
+              <Input
+                id="confirm-password-setup"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  setPasswordError("");
+                }}
+                placeholder="Confirm payment password"
+                className="mt-2"
+              />
+            </div>
+            {passwordError && (
+              <Alert variant="destructive">
+                <AlertDescription>{passwordError}</AlertDescription>
+              </Alert>
+            )}
+            <p className="text-xs text-gray-500">
+              This password will be required before every payment for security.
+            </p>
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={handlePaymentPasswordSetup} className="bg-black text-white">
+              Set Password
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Footer />
     </div>
   );

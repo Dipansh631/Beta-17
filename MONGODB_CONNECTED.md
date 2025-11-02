@@ -74,4 +74,3 @@ Files are stored in MongoDB GridFS:
 
 **🎉 MongoDB is now configured! Restart backend and test file uploads.**
 
-

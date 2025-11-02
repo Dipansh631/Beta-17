@@ -1,11 +1,10 @@
-// ML Models removed - simple image validation instead
-// import { GoogleGenerativeAI } from '@google/generative-ai'; // REMOVED
+import { getMongoDB } from '../config/mongodb.js';
+import { ObjectId } from 'mongodb';
 
-// const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // REMOVED
-// const genAI = null; // REMOVED - ML models disabled
-
-console.log('⚠️ Face verification using simple image check (ML models disabled)');
-
+/**
+ * Upload face/profile photo to MongoDB
+ * No AI verification - just saves the photo after user confirmation
+ */
 const verifyFace = async (req, res) => {
   try {
     const { image } = req.body;
@@ -20,7 +19,7 @@ const verifyFace = async (req, res) => {
     // Extract base64 data (remove data:image/jpeg;base64, prefix if present)
     const base64Data = image.includes(',') ? image.split(',')[1] : image;
     
-    // Convert base64 to buffer for basic validation
+    // Convert base64 to buffer
     let imageBuffer;
     try {
       imageBuffer = Buffer.from(base64Data, 'base64');
@@ -32,59 +31,93 @@ const verifyFace = async (req, res) => {
       });
     }
 
-    console.log('🔍 Simple image validation (ML models disabled)...');
-
-    // Simple validation: Check if image exists and has reasonable size
-    // In production, you would use actual face verification API
-    const minSize = 1000; // 1KB minimum
+    // Validate image size (file size in bytes)
+    const minSize = 100; // 100 bytes minimum (very small images might be corrupted)
     const maxSize = 10 * 1024 * 1024; // 10MB maximum
     
+    console.log('📏 Image size validation:', {
+      bufferSize: imageBuffer.length,
+      minSize,
+      maxSize,
+      isValid: imageBuffer.length >= minSize && imageBuffer.length <= maxSize,
+    });
+    
     if (imageBuffer.length < minSize) {
+      console.warn('⚠️ Image too small:', imageBuffer.length, 'bytes');
       return res.json({
         success: false,
         status: 'Invalid',
-        message: 'Image too small',
+        message: `Image too small (${imageBuffer.length} bytes). Please capture a clear photo.`,
       });
     }
     
     if (imageBuffer.length > maxSize) {
+      console.warn('⚠️ Image too large:', imageBuffer.length, 'bytes');
       return res.json({
         success: false,
         status: 'Invalid',
-        message: 'Image too large',
+        message: 'Image too large (max 10MB). Please use a smaller image.',
       });
     }
 
-    // Simple check - accept all images (ML verification disabled)
-    // In production, implement proper face verification
-    console.log('✅ Image passed basic validation');
-    const isVerified = true; // Always verify for now (ML models disabled)
+    // Upload face/profile photo to MongoDB
+    console.log('📤 Uploading profile photo to MongoDB...');
+    let faceImageUrl = '';
+    let faceFileId = null;
 
-    if (isVerified) {
-      console.log('✅ Face verification successful');
-      res.json({
-        success: true,
-        status: 'Verified',
-        message: 'Face verified successfully',
+    try {
+      const mongoDB = getMongoDB();
+      if (!mongoDB || !mongoDB.gridFSBucket) {
+        throw new Error('MongoDB not connected. Please check MongoDB connection and Atlas IP whitelist.');
+      }
+
+      const { gridFSBucket } = mongoDB;
+      const fileId = new ObjectId();
+      const fileName = `profile-${fileId}-${Date.now()}.jpg`;
+
+      const uploadStream = gridFSBucket.openUploadStream(fileName, {
+        _id: fileId,
+        contentType: 'image/jpeg',
+        metadata: {
+          type: 'profile_photo',
+          uploadedAt: new Date(),
+        },
       });
-    } else {
-      console.log('❌ Face verification failed');
-      res.json({
-        success: false,
-        status: 'Fake',
-        message: 'Face verification failed. Please retake the photo.',
+
+      uploadStream.end(imageBuffer);
+
+      await new Promise((resolve, reject) => {
+        uploadStream.on('finish', resolve);
+        uploadStream.on('error', reject);
       });
+
+      faceFileId = fileId.toString();
+      faceImageUrl = `/api/file/${faceFileId}`;
+      
+      console.log('✅ Profile photo uploaded to MongoDB:', faceFileId);
+    } catch (mongoError) {
+      console.error('❌ Error uploading profile photo to MongoDB:', mongoError);
+      throw new Error(`Failed to upload profile photo: ${mongoError.message}`);
     }
+
+    // Return success - no AI verification needed
+    console.log('✅ Profile photo saved successfully');
+    res.json({
+      success: true,
+      status: 'Saved',
+      message: 'Profile photo saved successfully',
+      faceImageUrl,
+      faceFileId,
+    });
   } catch (error) {
     console.error('❌ Error in verifyFace:', error);
     res.status(500).json({
       success: false,
       status: 'Error',
-      message: error.message || 'Failed to verify face',
+      message: error.message || 'Failed to save profile photo',
       error: process.env.NODE_ENV === 'development' ? error.stack : undefined,
     });
   }
 };
 
 export default verifyFace;
-

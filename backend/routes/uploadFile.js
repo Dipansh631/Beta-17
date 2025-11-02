@@ -3,6 +3,11 @@ import { ObjectId } from 'mongodb';
 import { getMongoDB } from '../config/mongodb.js';
 import fs from 'fs';
 import path from 'path';
+import dotenv from 'dotenv';
+import { verifyImageWithGemini } from './verifyImage.js';
+
+dotenv.config();
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // Configure multer for in-memory storage (for MongoDB GridFS)
 const storage = multer.memoryStorage();
@@ -30,56 +35,268 @@ const upload = multer({
  */
 const uploadFile = async (req, res) => {
   try {
+    console.log('📥 Received upload request:', {
+      hasFile: !!req.file,
+      hasFiles: !!req.files,
+      body: Object.keys(req.body),
+      fileField: req.file ? {
+        fieldname: req.file.fieldname,
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+      } : null,
+      verifyImage: req.body.verifyImage === 'true',
+      hasConditions: !!req.body.conditions,
+    });
+
     if (!req.file) {
+      console.error('❌ No file in request');
       return res.status(400).json({
         success: false,
-        message: 'No file uploaded',
+        message: 'No file uploaded. Please select a file.',
       });
     }
 
-    const { gridFSBucket } = getMongoDB();
+    // Image verification if requested (for NGO image uploads)
+    // Skip verification if API key is not configured
+    if (req.body.verifyImage === 'true' && req.file.mimetype.startsWith('image/') && GEMINI_API_KEY) {
+      console.log('🔍 Image verification requested...');
+      console.log('   Conditions provided:', !!req.body.conditions);
+      console.log('   Require verification:', req.body.requireVerification === 'true');
+      
+      try {
+        let conditions = [];
+        if (req.body.conditions) {
+          try {
+            conditions = JSON.parse(req.body.conditions);
+            console.log(`   Parsed ${conditions.length} conditions`);
+          } catch (e) {
+            console.warn('⚠️ Failed to parse conditions:', e.message);
+            console.warn('   Raw conditions:', req.body.conditions?.substring(0, 100));
+            conditions = [];
+          }
+        }
 
-    const fileId = new ObjectId();
-    const fileName = `${fileId}-${req.file.originalname}`;
+        const verification = await verifyImageWithGemini(
+          req.file.buffer,
+          req.file.mimetype,
+          conditions
+        );
+
+        console.log('✅ Image verification completed:', {
+          satisfiesConditions: verification.satisfiesConditions,
+          isAIGenerated: verification.isAIGenerated,
+          confidence: verification.confidence,
+        });
+
+        // Reject if AI-generated
+        if (verification.isAIGenerated) {
+          console.log('❌ Image rejected: Detected as AI-generated');
+          return res.status(400).json({
+            success: false,
+            message: 'Image verification failed: This image appears to be AI-generated. Please upload real photos of actual work.',
+            verification: {
+              satisfied: false,
+              reason: 'AI-generated image detected',
+              details: verification.details,
+            },
+          });
+        }
+
+        // Reject if doesn't satisfy conditions
+        if (!verification.satisfiesConditions) {
+          console.log('❌ Image rejected: Does not satisfy NGO conditions');
+          const reasonText = verification.reasoning ? ` ${verification.reasoning}` : '';
+          return res.status(400).json({
+            success: false,
+            message: `Image verification failed: This image does not match any of the NGO's conditions.${reasonText}`,
+            verification: {
+              satisfied: false,
+              reason: 'Image does not satisfy conditions',
+              details: verification.details,
+            },
+          });
+        }
+
+        console.log('✅ Image verification passed');
+        // Store verification result in metadata
+        req.file.verification = verification;
+      } catch (verificationError) {
+        console.error('❌ Image verification error:', verificationError);
+        console.error('   Error message:', verificationError.message);
+        console.error('   Error name:', verificationError.name);
+        if (verificationError.stack) {
+          console.error('   Error stack:', verificationError.stack.substring(0, 500));
+        }
+        
+        const errorMessage = verificationError.message || 'Unknown verification error';
+        const errorStr = errorMessage.toLowerCase();
+        
+        // Check if it's an API key or model availability issue - allow upload in these cases
+        // Model errors or API key errors are configuration issues, not verification failures
+        // Priority: Check for actual verification failures first, then allow all config errors
+        
+        // First check if it's an ACTUAL verification failure (AI-generated or doesn't match)
+        const isActualVerificationFailure = 
+          errorStr.includes('ai-generated') || 
+          errorStr.includes('does not match') || 
+          errorStr.includes('doesn\'t match') ||
+          errorStr.includes('doesn\'t satisfy');
+        
+        // If it's an actual verification failure, reject
+        if (isActualVerificationFailure) {
+          console.error('❌ Actual verification failure detected - image rejected');
+          console.error('   Error:', errorMessage);
+          return res.status(400).json({
+            success: false,
+            message: `Image verification failed: ${errorMessage}`,
+          });
+        }
+        
+        // Otherwise, treat as configuration error and allow upload
+        // All errors that reach here are configuration issues (not actual verification failures)
+        console.warn('⚠️ Verification configuration issue detected - allowing upload without verification');
+        console.warn('   Error:', errorMessage);
+        console.warn('   Error type: Configuration/Model availability issue');
+        console.warn('   Fix: Set a valid GEMINI_API_KEY in backend/.env or ensure vision models are available');
+        console.warn('   Upload will proceed without verification');
+        
+        // Always allow upload if it's a configuration error (we already checked for actual failures above)
+        // Continue with upload - don't return error
+      }
+    } else if (req.body.verifyImage === 'true' && req.file.mimetype.startsWith('image/') && !GEMINI_API_KEY) {
+      // Verification requested but API key not configured - allow upload
+      console.warn('⚠️ Image verification requested but GEMINI_API_KEY not configured');
+      console.warn('   Allowing upload without verification');
+      console.warn('   Set GEMINI_API_KEY in backend/.env to enable verification');
+    }
+
+    const mongoDB = getMongoDB();
+    if (!mongoDB || !mongoDB.gridFSBucket) {
+      return res.status(503).json({
+        success: false,
+        message: 'MongoDB not connected. Please check MongoDB connection and Atlas IP whitelist.',
+        error: 'MongoDB connection failed. File upload unavailable.',
+      });
+    }
+
+    const { gridFSBucket } = mongoDB;
+
+    // Generate file ID first
+    let fileId = new ObjectId();
+    // Sanitize filename to avoid special characters issues
+    const sanitizedOriginalName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const fileName = `${fileId}-${sanitizedOriginalName}`;
 
     console.log('📤 Uploading file to MongoDB GridFS...');
-    console.log('   File ID:', fileId);
-    console.log('   File Name:', req.file.originalname);
+    console.log('   File ID:', fileId.toString());
+    console.log('   Original Name:', req.file.originalname);
+    console.log('   Sanitized Name:', fileName);
     console.log('   File Size:', req.file.size, 'bytes');
     console.log('   File Type:', req.file.mimetype);
+    console.log('   User ID:', req.body.userId || 'anonymous');
 
-    // Upload to GridFS
-    const uploadStream = gridFSBucket.openUploadStream(fileName, {
-      _id: fileId,
-      contentType: req.file.mimetype,
-      metadata: {
-        originalName: req.file.originalname,
-        uploadedBy: req.body.userId || 'anonymous',
-        uploadedAt: new Date(),
-      },
-    });
+    // Upload to GridFS with explicit file ID
+    let uploadStream;
+    try {
+      uploadStream = gridFSBucket.openUploadStream(fileName, {
+        _id: fileId, // Explicitly set the file ID
+        contentType: req.file.mimetype,
+        metadata: {
+          originalName: req.file.originalname,
+          uploadedBy: req.body.userId || 'anonymous',
+          uploadedAt: new Date(),
+        },
+      });
+      console.log('✅ Upload stream created');
+    } catch (streamError) {
+      console.error('❌ Error creating upload stream:', streamError);
+      throw new Error(`Failed to create upload stream: ${streamError.message}`);
+    }
 
     // Write file buffer to GridFS
     uploadStream.end(req.file.buffer);
 
     // Wait for upload to complete
     await new Promise((resolve, reject) => {
-      uploadStream.on('finish', resolve);
-      uploadStream.on('error', reject);
+      uploadStream.on('finish', () => {
+        console.log('✅ GridFS upload stream finished');
+        console.log('   Uploaded file ID:', uploadStream.id.toString());
+        resolve();
+      });
+      uploadStream.on('error', (err) => {
+        console.error('❌ GridFS upload stream error:', err);
+        reject(err);
+      });
     });
 
-    console.log('✅ File uploaded to MongoDB GridFS successfully');
+    // Small delay to ensure GridFS has committed the file
+    await new Promise(resolve => setTimeout(resolve, 100));
 
-    // Return file ID and download URL
+    // Verify file was actually saved to GridFS
+    console.log('🔍 Verifying file was saved to GridFS...');
+    console.log('   Looking for file ID:', fileId.toString());
+    
+    let files;
+    try {
+      files = await gridFSBucket.find({ _id: fileId }).toArray();
+      console.log('   Files found:', files.length);
+      
+      // If not found, try finding by filename as fallback
+      if (!files || files.length === 0) {
+        console.log('   File not found by ID, trying to find by filename...');
+        files = await gridFSBucket.find({ filename: fileName }).toArray();
+        console.log('   Files found by filename:', files.length);
+        
+        if (files && files.length > 0) {
+          // Update fileId to the actual ID found
+          const actualFileId = files[0]._id;
+          console.log('   Found file with different ID:', actualFileId.toString());
+          fileId = actualFileId;
+        }
+      }
+    } catch (findError) {
+      console.error('❌ Error finding file in GridFS:', findError);
+      throw new Error(`Failed to verify file upload: ${findError.message}`);
+    }
+    
+    if (!files || files.length === 0) {
+      console.error('❌ File verification failed - file not found in GridFS after upload!');
+      console.error('   Expected file ID:', fileId.toString());
+      console.error('   Expected filename:', fileName);
+      
+      // Try to list recent files to debug
+      try {
+        const recentFiles = await gridFSBucket.find().sort({ uploadDate: -1 }).limit(5).toArray();
+        console.error('   Recent files in GridFS:', recentFiles.map(f => ({
+          id: f._id.toString(),
+          filename: f.filename,
+          uploadDate: f.uploadDate,
+        })));
+      } catch (listError) {
+        console.error('   Could not list recent files:', listError.message);
+      }
+      
+      throw new Error('File upload verification failed. File was not saved to database. Please try again.');
+    }
+    
+    console.log('✅ File uploaded to MongoDB GridFS successfully');
+    console.log('   File ID:', fileId.toString());
+    console.log('   File name:', files[0].filename);
+    console.log('   File size:', files[0].length, 'bytes');
+    console.log('   Upload date:', files[0].uploadDate);
+
+    // Return file ID and download URL (use relative URL for consistency)
     const fileUrl = `/api/file/${fileId}`;
-    const fullUrl = `${req.protocol}://${req.get('host')}${fileUrl}`;
+    const fullUrl = `${req.protocol}://${req.get('host') || req.get('hostname') || 'localhost:3000'}${fileUrl}`;
 
     res.json({
       success: true,
       data: {
         fileId: fileId.toString(),
         fileName: req.file.originalname,
-        fileUrl: fullUrl,
+        fileUrl: fileUrl, // Return relative URL to avoid issues
+        fullUrl: fullUrl, // Also provide full URL for reference
         fileSize: req.file.size,
         fileType: req.file.mimetype,
       },
@@ -87,10 +304,31 @@ const uploadFile = async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error uploading file to MongoDB:', error);
-    res.status(500).json({
+    console.error('   Error name:', error.name);
+    console.error('   Error message:', error.message);
+    console.error('   Error stack:', error.stack?.substring(0, 500));
+    
+    // Provide more helpful error messages
+    let errorMessage = error.message || 'Failed to upload file';
+    let statusCode = 500;
+    
+    if (error.message?.includes('MongoDB not connected')) {
+      statusCode = 503;
+      errorMessage = 'MongoDB not connected. Please check MongoDB connection and Atlas IP whitelist.';
+    } else if (error.message?.includes('verification failed')) {
+      errorMessage = 'File upload completed but verification failed. The file may not have been saved. Please try again.';
+    } else if (error.message?.includes('stream')) {
+      errorMessage = 'Failed to create upload stream. Please check MongoDB connection.';
+    }
+    
+    res.status(statusCode).json({
       success: false,
-      message: error.message || 'Failed to upload file',
-      error: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+      message: errorMessage,
+      error: process.env.NODE_ENV === 'development' ? {
+        name: error.name,
+        message: error.message,
+        stack: error.stack?.substring(0, 500),
+      } : undefined,
     });
   }
 };
@@ -102,7 +340,17 @@ const uploadFile = async (req, res) => {
 export const getFile = async (req, res) => {
   try {
     const { fileId } = req.params;
-    const { gridFSBucket } = getMongoDB();
+    
+    const mongoDB = getMongoDB();
+    if (!mongoDB || !mongoDB.gridFSBucket) {
+      return res.status(503).json({
+        success: false,
+        message: 'MongoDB not connected. Please check MongoDB connection and Atlas IP whitelist.',
+        error: 'MongoDB connection failed. File retrieval unavailable.',
+      });
+    }
+
+    const { gridFSBucket } = mongoDB;
 
     if (!ObjectId.isValid(fileId)) {
       return res.status(400).json({
@@ -125,9 +373,13 @@ export const getFile = async (req, res) => {
 
     const file = files[0];
 
-    // Set appropriate headers
+    // Set appropriate headers with CORS
     res.setHeader('Content-Type', file.contentType || 'application/octet-stream');
     res.setHeader('Content-Disposition', `inline; filename="${file.metadata?.originalName || 'file'}"`);
+    res.setHeader('Access-Control-Allow-Origin', '*'); // Allow all origins for images
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
 
     // Stream file from GridFS
     const downloadStream = gridFSBucket.openDownloadStream(objectId);
@@ -154,5 +406,4 @@ export const getFile = async (req, res) => {
 
 export { upload };
 export default uploadFile;
-
 

@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useAuth } from "@/contexts/AuthContext";
-import { Heart, Menu, X, LogOut, User } from "lucide-react";
+import { Heart, Menu, X, LogOut, User, FileText } from "lucide-react";
 
 const Navbar = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -92,6 +92,12 @@ const Navbar = () => {
                       Profile
                     </Link>
                   </DropdownMenuItem>
+                  <DropdownMenuItem asChild>
+                    <Link to="/ngo-dashboard" className="cursor-pointer">
+                      <FileText className="mr-2 h-4 w-4" />
+                      NGO Dashboard
+                    </Link>
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogout} className="cursor-pointer text-destructive">
                     <LogOut className="mr-2 h-4 w-4" />
@@ -166,6 +172,17 @@ const Navbar = () => {
                     >
                       <User className="mr-2 h-4 w-4" />
                       Profile
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start"
+                      onClick={() => {
+                        setIsMenuOpen(false);
+                        navigate("/ngo-dashboard");
+                      }}
+                    >
+                      <FileText className="mr-2 h-4 w-4" />
+                      NGO Dashboard
                     </Button>
                     <Button
                       variant="ghost"

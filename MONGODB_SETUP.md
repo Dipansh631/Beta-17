@@ -120,4 +120,3 @@ MONGODB_DB_NAME=community_donation_tracker
 
 **After setting up MongoDB, restart the backend and test file upload!** 🚀
 
-

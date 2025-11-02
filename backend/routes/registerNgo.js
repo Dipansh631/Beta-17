@@ -1,48 +1,18 @@
-import admin from 'firebase-admin';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import fs from 'fs';
+import { getMongoDB } from '../config/mongodb.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Initialize Firebase Admin (Optional - won't crash if missing)
-let db = null;
-try {
-  if (!admin.apps.length) {
-    const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || 
-                               path.join(__dirname, '..', 'serviceAccountKey.json');
-    
-    if (fs.existsSync(serviceAccountPath)) {
-      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-      });
-      db = admin.firestore();
-      console.log('✅ Firebase Admin initialized with service account');
-    } else {
-      console.warn('⚠️ Firebase serviceAccountKey.json not found. Firestore features will be disabled.');
-      console.warn('   To enable Firestore: Download serviceAccountKey.json from Firebase Console');
-    }
-  } else {
-    db = admin.firestore();
-  }
-} catch (error) {
-  console.warn('⚠️ Firebase Admin initialization failed. Firestore features will be disabled.');
-  console.warn('   Error:', error.message);
-  db = null;
-}
+// Use MongoDB for NGO registration instead of Firestore
 
 const registerNgo = async (req, res) => {
   try {
-    // Check if Firebase is available
-    if (!db) {
+    // Check if MongoDB is available
+    const mongoDB = getMongoDB();
+    if (!mongoDB || !mongoDB.db) {
       return res.status(503).json({
         success: false,
-        message: 'Firestore database not configured. Please set up Firebase serviceAccountKey.json',
+        message: 'MongoDB not connected. Please check MongoDB connection and Atlas IP whitelist.',
       });
     }
 
@@ -68,17 +38,13 @@ const registerNgo = async (req, res) => {
       });
     }
 
-    if (!db) {
-      return res.status(500).json({
-        success: false,
-        message: 'Firebase not initialized. Please configure serviceAccountKey.json',
-      });
-    }
-
     console.log(`📝 Registering NGO for user: ${uid}`);
+
+    const { db } = mongoDB;
 
     // Prepare NGO data structure
     const ngoData = {
+      _id: uid, // Use uid as document ID
       profile: {
         name: profile.name || '',
         dob: profile.dob || '',
@@ -96,37 +62,29 @@ const registerNgo = async (req, res) => {
         contact_email: details.contact_email || '',
         contact_phone: details.contact_phone || '',
       },
+      conditions: conditions && Array.isArray(conditions) ? conditions.map((condition, index) => ({
+        title: condition.title || '',
+        description: condition.description || '',
+        fund_estimate: condition.fund_estimate || 0,
+        priority: condition.priority || 'Medium',
+        order: index,
+      })) : [],
       status: 'pending_verification',
-      created_at: admin.firestore.FieldValue.serverTimestamp(),
-      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+      created_at: new Date(),
+      updated_at: new Date(),
     };
 
-    // Save to Firestore
-    const ngoRef = db.collection('ngos').doc(uid);
-    await ngoRef.set(ngoData, { merge: true });
+    // Save to MongoDB
+    const ngosCollection = db.collection('ngos');
+    await ngosCollection.updateOne(
+      { _id: uid },
+      { $set: ngoData },
+      { upsert: true } // Create if doesn't exist, update if exists
+    );
 
-    // Save conditions as subcollection
-    if (conditions && Array.isArray(conditions) && conditions.length > 0) {
-      const conditionsRef = ngoRef.collection('conditions');
-      const batch = db.batch();
+    console.log(`✅ Saved NGO registration with ${ngoData.conditions.length} conditions`);
 
-      conditions.forEach((condition, index) => {
-        const conditionRef = conditionsRef.doc();
-        batch.set(conditionRef, {
-          title: condition.title || '',
-          description: condition.description || '',
-          fund_estimate: condition.fund_estimate || 0,
-          priority: condition.priority || 'Medium',
-          order: index,
-          created_at: admin.firestore.FieldValue.serverTimestamp(),
-        });
-      });
-
-      await batch.commit();
-      console.log(`✅ Saved ${conditions.length} conditions`);
-    }
-
-    console.log('✅ NGO registered successfully');
+    console.log('✅ NGO registered successfully in MongoDB');
 
     res.json({
       success: true,

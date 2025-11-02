@@ -1,53 +1,83 @@
-# ⚠️ Backend Needs Restart
+# 🔄 Restart Backend to Fix MongoDB Connection
 
-The backend server needs to be **restarted** to apply the changes (ML models removed).
+## Issue
 
-## Quick Fix
+MongoDB connection test works, but the running server didn't connect to MongoDB on startup.
 
-### Step 1: Stop Current Backend
-Press `Ctrl+C` in the terminal where backend is running, OR:
+## Solution
 
-```bash
-# Kill process on port 3000
-Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue | 
-  Select-Object -ExpandProperty OwningProcess | 
-  ForEach-Object { Stop-Process -Id $_ -Force }
+**You need to restart your backend server** so it can connect to MongoDB.
+
+## Steps to Fix
+
+### Option 1: Automatic Restart (If using `npm run dev`)
+
+1. **Stop the backend** (press `Ctrl+C` in the backend terminal)
+2. **Restart it**:
+   ```bash
+   cd backend
+   npm run dev
+   ```
+
+### Option 2: Kill and Restart
+
+1. **Kill the backend process**:
+   ```powershell
+   Get-NetTCPConnection -LocalPort 3000 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }
+   ```
+
+2. **Start backend**:
+   ```bash
+   cd backend
+   npm run dev
+   ```
+
+## Expected Output After Restart
+
+You should see:
+```
+✅ Gemini AI initialized
+✅ Gemini AI initialized for face verification
+🔄 Connecting to MongoDB...
+✅ MongoDB connected successfully
+📦 Database: community_donation_tracker
+📁 GridFS Bucket: ngo_files
+✅ MongoDB ready for file storage
+🚀 Server running on http://localhost:3000
 ```
 
-### Step 2: Restart Backend
+## If MongoDB Still Fails
 
-**Option A: Restart Everything**
-```bash
-# Stop current npm run dev (Ctrl+C)
-# Then restart:
-npm run dev
+After restart, if you see:
+```
+⚠️ MongoDB connection failed: ...
 ```
 
-**Option B: Restart Backend Only**
+Then:
+
+1. **Check backend console** - look for the specific error message
+2. **Verify connection string** in `backend/.env`
+3. **Test connection manually**:
+   ```bash
+   cd backend
+   node test-mongodb.js
+   ```
+
+## Quick Reconnect (New Feature)
+
+If the server is running but MongoDB disconnected, you can try reconnecting via API:
+
 ```bash
-cd backend
-npm run dev
+curl -X POST http://localhost:3000/api/reconnect-mongodb
 ```
 
-## Verify Backend is Running
-
-1. Check health: http://localhost:3000/health
-2. Should return: `{"status":"ok","message":"NGO Registration API is running"}`
-
-## Check Backend Logs
-
-After restarting, watch the backend terminal. You should see:
-- ✅ No Gemini/ML model errors
-- ✅ Server running on port 3000
-- ✅ When uploading ID: PDF.co upload logs
-
-## If Still Getting 500 Error
-
-1. **Check backend terminal logs** - Look for error messages
-2. **Verify .env file** - Make sure `PDFCO_API_KEY` is set
-3. **Check PDF.co API** - Verify API key is valid and has credits
+Or use the browser console:
+```javascript
+fetch('http://localhost:3000/api/reconnect-mongodb', { method: 'POST' })
+  .then(r => r.json())
+  .then(console.log);
+```
 
 ---
 
-**The backend code has been updated (ML models removed), but it needs to restart to take effect!**
-
+**🎯 ACTION REQUIRED: Restart your backend server now!**

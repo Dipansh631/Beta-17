@@ -1,65 +1,85 @@
-# Quick Fix for "Failed to fetch" Error
+# 🚨 QUICK FIX - Restart Backend Server
 
-## The Problem
-When uploading Aadhaar photo, you see: "Failed to fetch" or "Cannot connect to Docext API"
+## Problem
+- MongoDB connection test ✅ **WORKS**
+- But running server ❌ **NOT CONNECTED**
+- Server was started BEFORE MongoDB connection was established
 
-## The Solution - Start 2 Servers
+## Solution: Restart Backend
 
-### Step 1: Start Docext API Server
+### Step 1: Stop Current Backend
 
-**Open a NEW terminal/command prompt and run:**
-```bash
-cd D:\dowl\photo_ver_model\docext-main
-python docext_api_server.py
+**In your backend terminal (where `npm run dev` is running):**
+- Press `Ctrl+C` to stop the server
+
+**OR if that doesn't work, kill the process:**
+```powershell
+Get-NetTCPConnection -LocalPort 3000 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }
 ```
 
-**Wait for:** "Starting Docext API server on http://localhost:8001"
-**Keep this terminal open!**
+### Step 2: Restart Backend
 
-### Step 2: Verify API Server is Running
-
-**Open in browser:** http://localhost:8001/health
-
-**Should see:** `{"status":"ok","docext_connected":true,...}`
-
-### Step 3: Start Frontend Dev Server (if not running)
-
-**Open another terminal and run:**
 ```bash
-cd D:\dowl\beta_17\Beta-17-main
+cd backend
 npm run dev
 ```
 
-**Wait for:** "Local: http://localhost:8080/"
+### Step 3: Verify Connection
 
-### Step 4: Test Again
+**Look for this in backend console:**
+```
+🔄 MongoDB connection attempt 1/3...
+✅ MongoDB connected successfully
+📦 Database: community_donation_tracker
+📁 GridFS Bucket: ngo_files
+✅ MongoDB ready for file storage
+🚀 Server running on http://localhost:3000
+```
 
-1. Go to http://localhost:8080/register-ngo
-2. Upload Aadhaar card photo
-3. Should work now!
+### Step 4: Test Upload
 
-## Quick Check Script
+1. Go to: http://localhost:8080/register-ngo
+2. Upload an ID document
+3. Should work now! ✅
 
-**Double-click this file:** `D:\dowl\photo_ver_model\docext-main\check_and_start.bat`
+---
 
-It will check and start servers automatically.
+## If Still Fails After Restart
 
-## If Still Not Working
+### Check Health Endpoint
+Visit: http://localhost:3000/health
 
-1. **Check if ports are in use:**
-   - Port 8001 (API server)
-   - Port 7860 (Gradio server - optional if API connects)
-   - Port 8080 (Frontend)
+Should show:
+```json
+{
+  "status": "ok",
+  "message": "NGO Registration API is running",
+  "mongodb": "connected"
+}
+```
 
-2. **Verify servers are accessible:**
-   - http://localhost:8001/health ← Should return JSON
-   - http://localhost:8080 ← Should show your app
+If `mongodb` shows `"disconnected"`, then:
+1. Check backend console for error messages
+2. Share the error message with me
 
-3. **Check terminal output** for errors
+### Manual Reconnect (New Feature)
 
-4. **Restart servers** - Close terminals and start again
+I added a reconnect endpoint. Try:
+```bash
+curl -X POST http://localhost:3000/api/reconnect-mongodb
+```
 
-## Manual Entry Option
+---
 
-While servers are starting, you can **enter Aadhaar details manually** in the form. The extraction is optional!
+## What I Fixed
 
+✅ Added retry logic (3 attempts with 2-second delays)  
+✅ Better error messages  
+✅ Health check endpoint shows MongoDB status  
+✅ Manual reconnect endpoint added  
+
+---
+
+**🎯 DO THIS NOW: Restart your backend server!**
+
+The code is fixed, but you need to restart the server so it can connect to MongoDB.
