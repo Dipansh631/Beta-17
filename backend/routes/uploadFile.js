@@ -77,10 +77,14 @@ const uploadFile = async (req, res) => {
           }
         }
 
+        // Check if strict condition matching is required
+        const requireStrictMatch = req.body.requireConditionMatch === 'true';
+        
         const verification = await verifyImageWithGemini(
           req.file.buffer,
           req.file.mimetype,
-          conditions
+          conditions,
+          requireStrictMatch
         );
 
         console.log('✅ Image verification completed:', {
@@ -89,16 +93,24 @@ const uploadFile = async (req, res) => {
           confidence: verification.confidence,
         });
 
-        // Reject if AI-generated
+        // Reject if AI-generated (CRITICAL CHECK - MUST BE FIRST)
         if (verification.isAIGenerated) {
           console.log('❌ Image rejected: Detected as AI-generated');
+          console.log('   AI generation signs:', verification.details?.aiGenerationSigns || 'Not specified');
+          
+          const aiSigns = verification.details?.aiGenerationSigns || [];
+          const signsText = aiSigns.length > 0 
+            ? ` Detected signs: ${aiSigns.slice(0, 3).join(', ')}${aiSigns.length > 3 ? '...' : ''}`
+            : '';
+          
           return res.status(400).json({
             success: false,
-            message: 'Image verification failed: This image appears to be AI-generated. Please upload real photos of actual work.',
+            message: `Image verification failed: This image appears to be AI-generated or synthetic. Only real photographs of actual NGO work are accepted.${signsText} Please upload authentic photos taken during actual work activities.`,
             verification: {
               satisfied: false,
               reason: 'AI-generated image detected',
               details: verification.details,
+              aiGenerationSigns: aiSigns,
             },
           });
         }
@@ -107,13 +119,24 @@ const uploadFile = async (req, res) => {
         if (!verification.satisfiesConditions) {
           console.log('❌ Image rejected: Does not satisfy NGO conditions');
           const reasonText = verification.reasoning ? ` ${verification.reasoning}` : '';
+          
+          // Create condition list for error message
+          const conditionList = conditions.length > 0 
+            ? conditions.map(c => c.title).join(', ')
+            : 'specified conditions';
+          
+          const strictModeNote = requireStrictMatch 
+            ? ` The image must show work specifically related to the condition(s) you allocated money to: ${conditionList}.`
+            : '';
+          
           return res.status(400).json({
             success: false,
-            message: `Image verification failed: This image does not match any of the NGO's conditions.${reasonText}`,
+            message: `Image verification failed: This image does not match any of the allocated condition(s): ${conditionList}.${strictModeNote}${reasonText}`,
             verification: {
               satisfied: false,
               reason: 'Image does not satisfy conditions',
               details: verification.details,
+              checkedConditions: conditions.map(c => c.title),
             },
           });
         }

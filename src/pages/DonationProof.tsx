@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/integrations/firebase/config";
@@ -171,15 +171,16 @@ const DonationProof = () => {
     });
   };
 
-  const getPieChartData = () => {
+  // Memoize pie chart data to ensure it updates when proof changes
+  const pieChartData = useMemo(() => {
     if (!proof || !proof.conditionAllocations) return [];
 
     return proof.conditionAllocations.map((allocation) => ({
       name: allocation.condition,
-      value: allocation.percentage,
-      amount: allocation.amount,
+      value: allocation.percentage || 0,
+      amount: allocation.amount || 0,
     }));
-  };
+  }, [proof?.conditionAllocations, proof?.id]);
 
   if (!currentUser) {
     return (
@@ -230,8 +231,6 @@ const DonationProof = () => {
       </div>
     );
   }
-
-  const pieChartData = getPieChartData();
 
   return (
     <div className="min-h-screen flex flex-col bg-white">
@@ -363,7 +362,7 @@ const DonationProof = () => {
                   <div className="grid md:grid-cols-2 gap-6">
                     <div className="h-64">
                       <ResponsiveContainer width="100%" height="100%">
-                        <RechartsPieChart>
+                        <RechartsPieChart key={`pie-${proof?.id}-${pieChartData.map(d => `${d.name}-${d.value}`).join('-')}`}>
                           <Pie
                             data={pieChartData}
                             cx="50%"
@@ -375,10 +374,13 @@ const DonationProof = () => {
                             outerRadius={80}
                             fill="#8884d8"
                             dataKey="value"
+                            animationBegin={0}
+                            animationDuration={400}
+                            isAnimationActive={true}
                           >
                             {pieChartData.map((entry, index) => (
                               <Cell
-                                key={`cell-${index}`}
+                                key={`cell-${entry.name}-${entry.value}-${index}`}
                                 fill={COLORS[index % COLORS.length]}
                               />
                             ))}

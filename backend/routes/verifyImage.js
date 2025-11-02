@@ -30,7 +30,7 @@ if (!GEMINI_API_KEY) {
  * @param {Array} conditions - Array of NGO conditions with title and description
  * @returns {Promise<Object>} Verification result
  */
-export const verifyImageWithGemini = async (imageBuffer, mimeType, conditions = []) => {
+export const verifyImageWithGemini = async (imageBuffer, mimeType, conditions = [], requireStrictMatch = false) => {
   if (!GEMINI_API_KEY || !genAI) {
     console.warn('⚠️ GEMINI_API_KEY not configured or genAI not initialized');
     throw new Error('GEMINI_API_KEY not configured. Image verification unavailable.');
@@ -53,6 +53,23 @@ export const verifyImageWithGemini = async (imageBuffer, mimeType, conditions = 
       ? conditions.map((cond, idx) => `${idx + 1}. ${cond.title}: ${cond.description || ''}`).join('\n')
       : 'General NGO work activities';
 
+          // Enhanced prompt for strict condition matching
+          const strictMatchInstruction = requireStrictMatch 
+            ? `\n\nSTRICT MATCHING MODE (REQUIRED):
+          - This image MUST show work directly related to ONE or MORE of the specific conditions listed above
+          - The image content should demonstrate activities described in the condition descriptions
+          - Be REASONABLE: If the image clearly shows NGO work that could reasonably relate to any of the conditions, return satisfiesConditions: true
+          - Return satisfiesConditions: true if the image shows:
+            * Work that could reasonably be related to any listed condition (even if not explicitly described)
+            * Activities that align with the general purpose of the conditions
+            * Real NGO work that demonstrates progress on similar goals
+          - Return satisfiesConditions: false ONLY if the image shows:
+            * Completely unrelated content (not NGO work at all)
+            * Work that has nothing to do with the listed conditions
+            * Generic stock photos or promotional materials
+          - BE LENIENT with condition matching - it's better to accept relevant work than reject legitimate NGO activities`
+            : '';
+
     // Create prompt for Gemini
     const prompt = `You are an expert image verification system. Analyze this image and provide a JSON response with the following structure:
 {
@@ -71,24 +88,41 @@ export const verifyImageWithGemini = async (imageBuffer, mimeType, conditions = 
 CRITERIA:
 1. Condition Satisfaction Check:
    - The image should show work/activities related to these NGO conditions:
-${conditionsText}
+${conditionsText}${strictMatchInstruction}
    - Check if the image content aligns with any of these conditions
    - Return satisfiesConditions: true only if the image clearly shows work related to at least one condition
    - Return conditionMatches with the matching condition title or null
 
-2. AI Generation Detection:
-   - Look for signs of AI generation: perfect symmetry, unnatural lighting, inconsistent details, lack of imperfections, overly polished look
-   - Check for artifacts, inconsistencies, or patterns typical of AI-generated images
-   - Return isAIGenerated: true if there are clear signs of AI generation
-   - List specific AI generation signs in aiGenerationSigns array
+2. AI Generation Detection (CRITICAL - REJECT IF DETECTED):
+   - This is a MANDATORY check - AI-generated images MUST be rejected
+   - Look for signs of AI generation including but not limited to:
+     * Perfect symmetry or unnaturally perfect compositions
+     * Unnatural or inconsistent lighting and shadows
+     * Inconsistent details, blurry artifacts, or warping
+     * Lack of natural imperfections or too polished appearance
+     * Floating or disconnected elements
+     * Unrealistic textures or patterns
+     * Strange color gradients or saturation
+     * Watermarks or metadata suggesting AI tools (DALL-E, Midjourney, Stable Diffusion, etc.)
+     * Unnatural hand positions, distorted body parts
+     * Text artifacts or garbled text
+     * Inconsistent perspective or scale
+     * Perfect reflections or lighting without sources
+   - Check EXHAUSTIVELY for any indicators of AI generation
+   - Return isAIGenerated: true if there are ANY signs of AI generation
+   - List ALL specific AI generation signs found in aiGenerationSigns array
+   - When in doubt, lean towards marking as AI-generated - better to reject a real photo than accept a fake one
 
 3. Confidence Score:
    - Rate confidence 0-100 based on how clear the image is and how certain you are about your assessment
+   - Lower confidence (below 70) if there are ANY doubts about authenticity
 
-IMPORTANT:
-- Be strict with AI detection - if there's any doubt, mark as AI-generated
-- Only approve real photos showing actual NGO work
-- Return valid JSON only, no additional text before or after`;
+IMPORTANT PRIORITY:
+1. FIRST CHECK: Is this AI-generated? If YES, immediately return isAIGenerated: true and satisfiesConditions: false
+2. SECOND CHECK: Does it match the conditions? Only check if not AI-generated
+3. Be EXTREMELY strict with AI detection - if there's ANY doubt, mark as AI-generated
+4. Real photos of actual NGO work are required - synthetic or AI-generated images are NOT acceptable
+5. Return valid JSON only, no additional text before or after`;
 
     console.log('🤖 Verifying image with Gemini AI...');
     console.log(`   Conditions to check: ${conditions.length}`);
@@ -203,10 +237,20 @@ IMPORTANT:
       console.error('❌ Failed to parse Gemini JSON:', parseError.message);
       console.error('   Raw Gemini response:', responseText);
       
-      // Fallback: Try to extract key information from text
-      const isAIGenerated = responseText.toLowerCase().includes('ai-generated') || 
-                           responseText.toLowerCase().includes('artificially generated') ||
-                           responseText.toLowerCase().includes('synthetic');
+      // Fallback: Try to extract key information from text with enhanced AI detection
+      const lowerText = responseText.toLowerCase();
+      const isAIGenerated = lowerText.includes('ai-generated') || 
+                           lowerText.includes('artificially generated') ||
+                           lowerText.includes('synthetic') ||
+                           lowerText.includes('generated by ai') ||
+                           lowerText.includes('ai creation') ||
+                           lowerText.includes('dall-e') ||
+                           lowerText.includes('midjourney') ||
+                           lowerText.includes('stable diffusion') ||
+                           lowerText.includes('computer-generated') ||
+                           (lowerText.includes('digital art') && lowerText.includes('generated')) ||
+                           lowerText.includes('not a real photo') ||
+                           (lowerText.includes('fake') && (lowerText.includes('image') || lowerText.includes('photo')));
       
       const satisfiesConditions = !responseText.toLowerCase().includes('does not match') &&
                                  !responseText.toLowerCase().includes('unrelated');

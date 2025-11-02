@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { db } from "@/integrations/firebase/config";
 import {
@@ -138,6 +138,7 @@ const BrowseCampaigns = () => {
 
   // Fetch campaigns from Firestore with real-time listener
   useEffect(() => {
+    let isMounted = true;
     setLoading(true);
     
     let q = query(collection(db, "ngos"));
@@ -154,83 +155,120 @@ const BrowseCampaigns = () => {
     }
 
     const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const campaignsData: NGOCampaign[] = [];
-      
-      for (const docSnap of snapshot.docs) {
-        const data = docSnap.data() as Omit<NGOCampaign, "id">;
+      // Check if component is still mounted before processing
+      if (!isMounted) {
+        return;
+      }
+
+      try {
+        const campaignsData: NGOCampaign[] = [];
         
-        // Client-side verified filter
-        if (verifiedOnly && !data.profile?.verified) {
-          continue;
-        }
-        
-        // Calculate totals
-        const totalGoal = data.conditions?.reduce((sum, cond) => sum + (cond.fund_estimate || 0), 0) || 0;
-        
-        // Fetch donations for this campaign
-        const donationsQuery = query(
-          collection(db, "donations"),
-          where("campaignId", "==", docSnap.id)
-        );
-        const donationsSnapshot = await getDocs(donationsQuery);
-        const campaignDonations = donationsSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        })) as Transaction[];
-        
-        // Calculate raised amounts per condition
-        const conditionRaised: Record<string, number> = {};
-        campaignDonations.forEach(donation => {
-          if (donation.condition) {
-            conditionRaised[donation.condition] = (conditionRaised[donation.condition] || 0) + donation.amount;
+        for (const docSnap of snapshot.docs) {
+          // Check mounted status before each async operation
+          if (!isMounted) {
+            return;
           }
-        });
-        
-        // Update conditions with raised amounts
-        const conditionsWithRaised = data.conditions?.map(cond => ({
-          ...cond,
-          raised: conditionRaised[cond.title] || 0
-        })) || [];
-        
-        const totalRaised = campaignDonations.reduce((sum, d) => sum + d.amount, 0);
-        
-        // Get total_raised from document or use calculated value
-        const documentTotalRaised = data.total_raised || 0;
-        const finalTotalRaised = documentTotalRaised > 0 ? documentTotalRaised : totalRaised;
-        
-        campaignsData.push({
-          id: docSnap.id,
-          ...data,
-          conditions: conditionsWithRaised,
-          total_raised: finalTotalRaised,
-          total_goal: totalGoal,
-        });
-      }
-      
-      // Show all registered campaigns (including completed ones)
-      // Only ensure campaign has required data (details, conditions) to appear
-      const allCampaigns = campaignsData.filter(campaign => {
-        // Must have NGO details and conditions to be shown
-        if (!campaign.details?.ngo_name || !campaign.conditions || campaign.conditions.length === 0) {
-          return false;
+
+          const data = docSnap.data() as Omit<NGOCampaign, "id">;
+          
+          // Client-side verified filter
+          if (verifiedOnly && !data.profile?.verified) {
+            continue;
+          }
+          
+          // Calculate totals
+          const totalGoal = data.conditions?.reduce((sum, cond) => sum + (cond.fund_estimate || 0), 0) || 0;
+          
+          // Fetch donations for this campaign
+          const donationsQuery = query(
+            collection(db, "donations"),
+            where("campaignId", "==", docSnap.id)
+          );
+          const donationsSnapshot = await getDocs(donationsQuery);
+          
+          // Check mounted status after async operation
+          if (!isMounted) {
+            return;
+          }
+
+          const campaignDonations = donationsSnapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          })) as Transaction[];
+          
+          // Calculate raised amounts per condition
+          const conditionRaised: Record<string, number> = {};
+          campaignDonations.forEach(donation => {
+            if (donation.condition) {
+              conditionRaised[donation.condition] = (conditionRaised[donation.condition] || 0) + donation.amount;
+            }
+          });
+          
+          // Update conditions with raised amounts
+          const conditionsWithRaised = data.conditions?.map(cond => ({
+            ...cond,
+            raised: conditionRaised[cond.title] || 0
+          })) || [];
+          
+          const totalRaised = campaignDonations.reduce((sum, d) => sum + d.amount, 0);
+          
+          // Get total_raised from document or use calculated value
+          const documentTotalRaised = data.total_raised || 0;
+          const finalTotalRaised = documentTotalRaised > 0 ? documentTotalRaised : totalRaised;
+          
+          campaignsData.push({
+            id: docSnap.id,
+            ...data,
+            conditions: conditionsWithRaised,
+            total_raised: finalTotalRaised,
+            total_goal: totalGoal,
+          });
         }
-        return true; // Show all campaigns that have required data
-      });
-      
-      // Apply search filter
-      let filtered = allCampaigns;
-      if (searchQuery.trim()) {
-        const query = searchQuery.toLowerCase();
-        filtered = allCampaigns.filter(campaign =>
-          campaign.details.ngo_name.toLowerCase().includes(query) ||
-          campaign.details.description.toLowerCase().includes(query) ||
-          campaign.details.donation_category.toLowerCase().includes(query)
-        );
+        
+        // Final mounted check before state updates
+        if (!isMounted) {
+          return;
+        }
+        
+        // Show all registered campaigns (including completed ones)
+        // Only ensure campaign has required data (details, conditions) to appear
+        const allCampaigns = campaignsData.filter(campaign => {
+          // Must have NGO details and conditions to be shown
+          if (!campaign.details?.ngo_name || !campaign.conditions || campaign.conditions.length === 0) {
+            return false;
+          }
+          return true; // Show all campaigns that have required data
+        });
+        
+        // Apply search filter
+        let filtered = allCampaigns;
+        if (searchQuery.trim()) {
+          const query = searchQuery.toLowerCase();
+          filtered = allCampaigns.filter(campaign =>
+            campaign.details.ngo_name.toLowerCase().includes(query) ||
+            campaign.details.description.toLowerCase().includes(query) ||
+            campaign.details.donation_category.toLowerCase().includes(query)
+          );
+        }
+        
+        setCampaigns(filtered);
+        setLoading(false);
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+        console.error("Error processing campaigns:", error);
+        toast({
+          title: "Error",
+          description: "Failed to process campaigns. Please try again.",
+          variant: "destructive",
+        });
+        setLoading(false);
       }
-      
-      setCampaigns(filtered);
-      setLoading(false);
     }, (error) => {
+      if (!isMounted) {
+        return;
+      }
       console.error("Error fetching campaigns:", error);
       toast({
         title: "Error",
@@ -240,7 +278,10 @@ const BrowseCampaigns = () => {
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, [selectedCategory, verifiedOnly, searchQuery, toast]);
 
   // Load donations when details modal opens
@@ -777,6 +818,12 @@ const BrowseCampaigns = () => {
     }));
   };
 
+  // Memoize chart data to ensure pie chart updates when campaign data changes
+  const chartDataForSelectedCampaign = useMemo(() => {
+    if (!selectedCampaign) return [];
+    return getChartData(selectedCampaign);
+  }, [selectedCampaign?.id, selectedCampaign?.conditions, selectedCampaign?.total_raised, selectedCampaign?.conditions?.map(c => c.raised).join(',')]);
+
   // Loading Skeleton
   const LoadingSkeleton = () => (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1113,9 +1160,9 @@ const BrowseCampaigns = () => {
                         </CardHeader>
                         <CardContent>
                           <ResponsiveContainer width="100%" height={300}>
-                            <PieChart>
+                            <PieChart key={`pie-${selectedCampaign.id}-${selectedCampaign.total_raised || 0}`}>
                               <Pie
-                                data={getChartData(selectedCampaign).map(d => ({
+                                data={chartDataForSelectedCampaign.map(d => ({
                                   name: d.name,
                                   value: d.raised
                                 }))}
@@ -1126,9 +1173,15 @@ const BrowseCampaigns = () => {
                                 outerRadius={80}
                                 fill="#8884d8"
                                 dataKey="value"
+                                animationBegin={0}
+                                animationDuration={400}
+                                isAnimationActive={true}
                               >
-                                {getChartData(selectedCampaign).map((entry, index) => (
-                                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                {chartDataForSelectedCampaign.map((entry, index) => (
+                                  <Cell 
+                                    key={`cell-${entry.name}-${entry.raised}-${index}`} 
+                                    fill={COLORS[index % COLORS.length]} 
+                                  />
                                 ))}
                               </Pie>
                               <Tooltip />
@@ -1145,7 +1198,7 @@ const BrowseCampaigns = () => {
                         </CardHeader>
                         <CardContent>
                           <ResponsiveContainer width="100%" height={300}>
-                            <BarChart data={getChartData(selectedCampaign)}>
+                            <BarChart data={chartDataForSelectedCampaign}>
                               <CartesianGrid strokeDasharray="3 3" />
                               <XAxis dataKey="name" />
                               <YAxis />

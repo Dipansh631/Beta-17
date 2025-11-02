@@ -11,6 +11,7 @@ import {
   serverTimestamp,
   addDoc,
   getDoc,
+  onSnapshot,
 } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -136,6 +137,13 @@ const NGODashboard = () => {
   const [proofDescription, setProofDescription] = useState("");
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Image verification states
+  const [imageVerificationStatus, setImageVerificationStatus] = useState<Map<number, {
+    status: 'pending' | 'verifying' | 'verified' | 'failed';
+    message?: string;
+  }>>(new Map());
+  const [verifyingImages, setVerifyingImages] = useState(false);
   const [activeTab, setActiveTab] = useState<"organization" | "proofs" | "gallery">("organization");
   
   // Image gallery states (separate from work proofs)
@@ -175,6 +183,22 @@ const NGODashboard = () => {
       initializeConditionAllocations();
       loadGalleryImages();
       calculateUsedMoney().then(setUsedMoney);
+      
+      // Set up real-time listener for workProofs to update usedMoney automatically
+      const proofQuery = query(
+        collection(db, "workProofs"),
+        where("campaignId", "==", campaign.id)
+      );
+      
+      const unsubscribe = onSnapshot(proofQuery, async () => {
+        // Recalculate used money when workProofs change
+        const newUsedMoney = await calculateUsedMoney();
+        setUsedMoney(newUsedMoney);
+      }, (error) => {
+        console.error("Error listening to workProofs:", error);
+      });
+      
+      return () => unsubscribe();
     }
   }, [campaign]);
 
@@ -213,7 +237,14 @@ const NGODashboard = () => {
           totalUsed += proofTotal;
         }
       });
-      return totalUsed;
+      
+      // Ensure used money never exceeds total received
+      // Get total received for validation
+      const selectedDonations = donations.filter(d => d.campaignId === campaign.id);
+      const walletBalance = selectedDonations.reduce((sum, d) => sum + d.amount, 0);
+      
+      // Cap used money at wallet balance
+      return Math.min(totalUsed, walletBalance);
     } catch (error) {
       console.error("Error calculating used money:", error);
       return 0;
@@ -501,6 +532,154 @@ const NGODashboard = () => {
   const removePhoto = (index: number) => {
     setProofPhotos(proofPhotos.filter((_, i) => i !== index));
     setProofPhotoUrls(proofPhotoUrls.filter((_, i) => i !== index));
+    // Remove verification status for this image
+    const newStatus = new Map(imageVerificationStatus);
+    newStatus.delete(index);
+    // Reindex remaining statuses
+    const reindexedStatus = new Map<number, { status: 'pending' | 'verifying' | 'verified' | 'failed'; message?: string }>();
+    newStatus.forEach((value, key) => {
+      if (key > index) {
+        reindexedStatus.set(key - 1, value);
+      } else {
+        reindexedStatus.set(key, value);
+      }
+    });
+    setImageVerificationStatus(reindexedStatus);
+  };
+
+  // Verify all images before submission
+  const verifyAllImages = async () => {
+    if (!campaign || proofPhotos.length === 0) {
+      toast({
+        title: "No Images",
+        description: "Please select images to verify first.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Get conditions that received allocations
+    const allocatedConditions = conditionAllocations
+      .filter(alloc => alloc.amount > 0)
+      .map(alloc => {
+        const fullCondition = campaign?.conditions?.find(c => c.title === alloc.condition);
+        return fullCondition || { title: alloc.condition, description: '' };
+      });
+
+    if (allocatedConditions.length === 0) {
+      toast({
+        title: "No Allocations",
+        description: "Please allocate money to at least one condition before verifying images.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setVerifyingImages(true);
+    const verificationStatus = new Map<number, { status: 'pending' | 'verifying' | 'verified' | 'failed'; message?: string }>();
+
+    // Initialize all as verifying
+    proofPhotos.forEach((_, index) => {
+      verificationStatus.set(index, { status: 'verifying' });
+    });
+    setImageVerificationStatus(verificationStatus);
+
+    let allVerified = true;
+
+    // Verify each image
+    for (let index = 0; index < proofPhotos.length; index++) {
+      const photo = proofPhotos[index];
+      
+      if (!photo || !photo.type.startsWith('image/')) {
+        verificationStatus.set(index, {
+          status: 'failed',
+          message: 'Invalid image file'
+        });
+        allVerified = false;
+        continue;
+      }
+
+      try {
+        const formData = new FormData();
+        formData.append("file", photo);
+        formData.append("verifyImage", "true");
+        formData.append("requireVerification", "true");
+        formData.append("conditions", JSON.stringify(allocatedConditions));
+        formData.append("requireConditionMatch", "true");
+
+        console.log(`Verifying image ${index + 1}/${proofPhotos.length}...`);
+        console.log('Conditions being checked:', allocatedConditions.map(c => c.title).join(', '));
+
+        const response = await axios.post(getApiUrl("/api/upload-file"), formData, {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
+        });
+
+        console.log(`Image ${index + 1} verification response:`, {
+          success: response.data.success,
+          message: response.data.message,
+          fileUrl: response.data.fileUrl ? 'Received' : 'Missing'
+        });
+
+        // Check if verification passed - success means both verification passed AND file uploaded
+        // Backend returns { success: true, data: { fileUrl: ... }, message: ... }
+        const fileUrl = response.data.data?.fileUrl || response.data.fileUrl;
+        if (response.data.success === true && fileUrl) {
+          verificationStatus.set(index, {
+            status: 'verified',
+            message: 'Image verified: Real photo matching allocated conditions'
+          });
+          console.log(`✅ Image ${index + 1} verified successfully`);
+        } else {
+          // Check if there's a specific verification error message
+          const errorMsg = response.data.message || response.data.verification?.reason || 'Verification failed';
+          verificationStatus.set(index, {
+            status: 'failed',
+            message: errorMsg
+          });
+          allVerified = false;
+          console.error(`❌ Image ${index + 1} verification failed:`, errorMsg);
+        }
+      } catch (error: any) {
+        // More detailed error handling
+        const errorMessage = error.response?.data?.message || 
+                           error.response?.data?.verification?.reason ||
+                           error.message || 
+                           'Verification failed';
+        
+        console.error(`❌ Image ${index + 1} verification error:`, {
+          message: errorMessage,
+          status: error.response?.status,
+          data: error.response?.data
+        });
+
+        verificationStatus.set(index, {
+          status: 'failed',
+          message: errorMessage
+        });
+        allVerified = false;
+      }
+
+      // Update status after each verification
+      setImageVerificationStatus(new Map(verificationStatus));
+    }
+
+    setVerifyingImages(false);
+
+    if (allVerified) {
+      toast({
+        title: "✅ All Images Verified",
+        description: `All ${proofPhotos.length} image(s) passed verification. They are real photos and match the allocated conditions.`,
+      });
+    } else {
+      const failedCount = Array.from(verificationStatus.values()).filter(v => v.status === 'failed').length;
+      toast({
+        title: "⚠️ Verification Failed",
+        description: `${failedCount} out of ${proofPhotos.length} image(s) failed verification. Please check the details and remove or replace failed images.`,
+        variant: "destructive",
+      });
+    }
   };
 
   const updateConditionAllocation = (index: number, amount: number) => {
@@ -585,6 +764,28 @@ const NGODashboard = () => {
       return;
     }
 
+    // Check if all images are verified
+    const unverifiedCount = Array.from(imageVerificationStatus.values()).filter(v => v.status !== 'verified').length;
+    if (unverifiedCount > 0 || imageVerificationStatus.size !== proofPhotos.length) {
+      toast({
+        title: "Images Not Verified",
+        description: "Please verify all images before submission. Click 'Verify Images' button to check if images are AI-generated and match the allocated conditions.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check if any image failed verification
+    const failedCount = Array.from(imageVerificationStatus.values()).filter(v => v.status === 'failed').length;
+    if (failedCount > 0) {
+      toast({
+        title: "Verification Failed",
+        description: `${failedCount} image(s) failed verification. Please remove or replace failed images before submission.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (!proofDescription.trim()) {
       toast({
         title: "Description Required",
@@ -615,9 +816,25 @@ const NGODashboard = () => {
         formData.append("file", photo);
         
         // Add verification flags and conditions for image verification
+        // Only verify against conditions that received allocations in this proof
         formData.append("verifyImage", "true");
         formData.append("requireVerification", "true");
-        if (campaign && campaign.conditions && campaign.conditions.length > 0) {
+        
+        // Get conditions that received allocations (amount > 0)
+        const allocatedConditions = conditionAllocations
+          .filter(alloc => alloc.amount > 0)
+          .map(alloc => {
+            // Find the full condition details from campaign.conditions
+            const fullCondition = campaign?.conditions?.find(c => c.title === alloc.condition);
+            return fullCondition || { title: alloc.condition, description: '' };
+          });
+        
+        // Only verify if there are allocated conditions
+        if (allocatedConditions.length > 0) {
+          formData.append("conditions", JSON.stringify(allocatedConditions));
+          formData.append("requireConditionMatch", "true"); // Flag to require strict condition matching
+        } else if (campaign && campaign.conditions && campaign.conditions.length > 0) {
+          // Fallback: use all conditions if no allocations specified
           formData.append("conditions", JSON.stringify(campaign.conditions));
         }
 
@@ -688,6 +905,10 @@ const NGODashboard = () => {
 
       await addDoc(collection(db, "workProofs"), proofData);
 
+      // Recalculate used money immediately after submission to update wallet amounts
+      const newUsedMoney = await calculateUsedMoney();
+      setUsedMoney(newUsedMoney);
+
       toast({
         title: "✅ Proof Submitted!",
         description: "Work proof has been submitted. All donors for this NGO can now view how their money was used.",
@@ -700,6 +921,7 @@ const NGODashboard = () => {
       setConditionAllocations([]);
       setTotalUsedAmount(0);
       setProofDescription("");
+      setImageVerificationStatus(new Map());
       
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -776,7 +998,9 @@ const NGODashboard = () => {
   const totalRaised = selectedDonations.reduce((sum, d) => sum + d.amount, 0);
   const proofsSubmitted = selectedDonations.filter((d) => d.proofSubmitted).length;
   const walletBalance = totalRaised; // Total money recorded/received
-  const remainingMoney = Math.max(0, walletBalance - usedMoney); // Money received but not yet justified (never negative)
+  // Ensure used money never exceeds wallet balance
+  const cappedUsedMoney = Math.min(usedMoney, walletBalance);
+  const remainingMoney = Math.max(0, walletBalance - cappedUsedMoney); // Money received but not yet justified (never negative)
 
   const formatDate = (timestamp: any) => {
     if (!timestamp) return "N/A";
@@ -879,7 +1103,7 @@ const NGODashboard = () => {
             </CardHeader>
             <CardContent>
               <p className="text-3xl font-bold text-green-600">
-                ₹{usedMoney.toLocaleString()}
+                ₹{cappedUsedMoney.toLocaleString()}
               </p>
               <p className="text-sm text-gray-600 mt-1">
                 Money utilized with proof
@@ -1304,24 +1528,82 @@ const NGODashboard = () => {
               <div>
                 <Label>Work Proof Photos (Required)</Label>
                 <div className="mt-2 space-y-4">
+                  {/* Verify Images Button */}
+                  {proofPhotos.length > 0 && (
+                    <div className="mb-4">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={verifyAllImages}
+                        disabled={verifyingImages || conditionAllocations.filter(a => a.amount > 0).length === 0}
+                        className="w-full"
+                      >
+                        {verifyingImages ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Verifying Images...
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="mr-2 h-4 w-4" />
+                            Verify Images (Check AI & Condition Match)
+                          </>
+                        )}
+                      </Button>
+                      {conditionAllocations.filter(a => a.amount > 0).length === 0 && (
+                        <p className="text-xs text-gray-500 mt-1">
+                          Please allocate money to conditions first
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   <div className="flex flex-wrap gap-4">
-                    {proofPhotoUrls.map((url, index) => (
-                      <div key={index} className="relative">
-                        <img
-                          src={url}
-                          alt={`Proof ${index + 1}`}
-                          className="w-32 h-32 object-cover rounded-lg border"
-                        />
-                        <Button
-                          variant="destructive"
-                          size="icon"
-                          className="absolute -top-2 -right-2 h-6 w-6 rounded-full"
-                          onClick={() => removePhoto(index)}
-                        >
-                          <X className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    ))}
+                    {proofPhotoUrls.map((url, index) => {
+                      const verification = imageVerificationStatus.get(index);
+                      const status = verification?.status || 'pending';
+                      return (
+                        <div key={index} className="relative">
+                          <img
+                            src={url}
+                            alt={`Proof ${index + 1}`}
+                            className={`w-32 h-32 object-cover rounded-lg border-2 ${
+                              status === 'verified' ? 'border-green-500' :
+                              status === 'failed' ? 'border-red-500' :
+                              status === 'verifying' ? 'border-yellow-500 animate-pulse' :
+                              'border-gray-300'
+                            }`}
+                          />
+                          {/* Status Badge */}
+                          {status !== 'pending' && (
+                            <div className={`absolute top-1 left-1 px-2 py-1 rounded text-xs font-semibold ${
+                              status === 'verified' ? 'bg-green-500 text-white' :
+                              status === 'failed' ? 'bg-red-500 text-white' :
+                              'bg-yellow-500 text-white'
+                            }`}>
+                              {status === 'verified' ? '✓ Verified' :
+                               status === 'failed' ? '✗ Failed' :
+                               'Verifying...'}
+                            </div>
+                          )}
+                          <Button
+                            variant="destructive"
+                            size="icon"
+                            className="absolute -top-2 -right-2 h-6 w-6 rounded-full"
+                            onClick={() => removePhoto(index)}
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                          {/* Error message tooltip */}
+                          {status === 'failed' && verification?.message && (
+                            <div className="absolute bottom-0 left-0 right-0 bg-red-500 text-white text-xs p-2 rounded-b-lg z-10 max-h-20 overflow-y-auto">
+                              {verification.message.substring(0, 80)}
+                              {verification.message.length > 80 ? '...' : ''}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                     {proofPhotos.length < 10 && (
                       <label className="cursor-pointer">
                         <div className="w-32 h-32 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center hover:border-gray-400 transition-colors">
@@ -1339,7 +1621,8 @@ const NGODashboard = () => {
                     )}
                   </div>
                   <p className="text-xs text-gray-500">
-                    Upload at least one photo showing the work done (Max 10 photos)
+                    Upload at least one photo showing the work done (Max 10 photos). 
+                    <strong className="text-black"> Click "Verify Images" to check if images are AI-generated and match allocated conditions before submission.</strong>
                   </p>
                 </div>
               </div>
