@@ -229,29 +229,61 @@ const RegisterNGO = () => {
       console.error("Error response:", err.response?.data);
       console.error("Error details:", err.response?.data?.error);
       
+      // Check if it's a connection error (backend not running)
+      const isConnectionError = 
+        err.code === 'ERR_CONNECTION_REFUSED' ||
+        err.code === 'ECONNREFUSED' ||
+        err.message?.includes('ERR_CONNECTION_REFUSED') ||
+        err.message?.includes('ECONNREFUSED') ||
+        err.message?.includes('Network Error') ||
+        !err.response;
+      
       // Provide user-friendly error messages
       let errorMsg = "Failed to extract ID information";
+      let errorDescription = "Please try again or contact support if the issue persists.";
+      
+      if (isConnectionError) {
+        errorMsg = "Backend Server Not Available";
+        errorDescription = "The backend server is not running or not accessible. Please ensure the backend server is started on port 3000. If you're a developer, check that the backend is running.";
+      } else if (err.response?.data?.message) {
+        errorMsg = err.response.data.message;
+        errorDescription = err.response.data.error?.details || errorDescription;
+      } else if (err.message) {
+        errorMsg = err.message;
+      }
       
       // Show detailed error in development
       if (err.response?.data?.error) {
         console.error("Detailed error:", JSON.stringify(err.response.data.error, null, 2));
       }
       
-      if (err.message?.includes('timeout')) {
-        errorMsg = "❌ Request timed out. Please try again with a smaller file.";
-      } else if (err.message?.includes('MongoDB')) {
-        errorMsg = "❌ Database error. Please check MongoDB connection.";
-      } else if (err.message?.includes('upload')) {
-        errorMsg = err.message;
-      } else {
-        errorMsg = err.response?.data?.message || err.message || errorMsg;
+      if (isConnectionError) {
+        console.error("Backend connection failed. Make sure the backend server is running on port 3000.");
+      }
+      
+      // Override with specific error messages if not already set
+      if (!isConnectionError) {
+        if (err.message?.includes('timeout')) {
+          errorMsg = "Request timed out";
+          errorDescription = "The request took too long. Please try again with a smaller file.";
+        } else if (err.message?.includes('MongoDB')) {
+          errorMsg = "Database error";
+          errorDescription = "Please check MongoDB connection.";
+        } else if (err.message?.includes('upload')) {
+          errorMsg = err.message;
+        } else if (err.response?.data?.message) {
+          errorMsg = err.response.data.message;
+        } else if (err.message) {
+          errorMsg = err.message;
+        }
       }
 
       setError(errorMsg);
       toast({
-        title: "❌ Extraction failed",
-        description: errorMsg + ". Please enter details manually.",
+        title: `❌ ${errorMsg}`,
+        description: errorDescription + (isConnectionError ? "" : " Please enter details manually."),
         variant: "destructive",
+        duration: isConnectionError ? 15000 : 5000, // Show longer for connection errors
       });
 
       // Clear extracted data

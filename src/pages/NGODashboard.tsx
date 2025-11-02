@@ -89,6 +89,9 @@ interface NGOCampaign {
   details: {
     ngo_name: string;
     description: string;
+    donation_category?: string;
+    contact_email?: string;
+    [key: string]: any; // Allow other properties that might exist
   };
   conditions: FundingCondition[];
   total_raised?: number;
@@ -1292,12 +1295,12 @@ const NGODashboard = () => {
                     <div>
                       <Label className="text-gray-600">Category</Label>
                       <p className="font-semibold text-black">
-                        {campaign.details.donation_category || "N/A"}
+                        {(campaign.details as any).donation_category || "N/A"}
                       </p>
                     </div>
                     <div>
                       <Label className="text-gray-600">Contact Email</Label>
-                      <p className="text-black">{campaign.details.contact_email || "N/A"}</p>
+                      <p className="text-black">{(campaign.details as any).contact_email || "N/A"}</p>
                     </div>
                   </div>
                 </div>
