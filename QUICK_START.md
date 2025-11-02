@@ -1,103 +1,47 @@
-# 🚀 Quick Start Guide - NGO Registration System
+# Quick Start Guide - Run on Localhost
 
-## Prerequisites Setup
+## Option 1: Double-click START.bat (Easiest)
+Just double-click `START.bat` in the project root. It will:
+- Start backend server (port 3000)
+- Start frontend server (port 8080)
+- Open browser automatically
 
-### 1. Backend Setup (First Time)
+## Option 2: Manual Start
 
-```bash
-# Navigate to backend folder
-cd backend
-
-# Install dependencies
-npm install
-
-# Create .env file
-cp env.template .env
-
-# Edit .env and add your keys:
-# - PDFCO_API_KEY=your_key_here
-# - GEMINI_API_KEY=your_key_here
-```
-
-### 2. Get API Keys
-
-#### PDF.co API Key
-1. Sign up: https://pdf.co
-2. Go to Dashboard → API Keys
-3. Copy key to `backend/.env`
-
-#### Gemini API Key
-1. Go to: https://makersuite.google.com/app/apikey
-2. Create API key
-3. Copy to `backend/.env`
-
-#### Firebase Service Account
-1. Go to: https://console.firebase.google.com
-2. Select your project
-3. Settings → Service Accounts
-4. Generate new private key
-5. Save as `backend/serviceAccountKey.json`
-
-## Running the Application
-
-### Option 1: Run Everything Together
-```bash
-# From project root
-npm run dev
-```
-This starts both frontend (port 8080) and backend (port 3000).
-
-### Option 2: Run Separately
-
-**Terminal 1 - Frontend:**
-```bash
-npm run dev:frontend
-```
-
-**Terminal 2 - Backend:**
+### Terminal 1 - Backend:
 ```bash
 cd backend
 npm run dev
 ```
 
-## Access Points
+### Terminal 2 - Frontend:
+```bash
+npm run dev:frontend-only
+```
 
-- **Frontend:** http://localhost:8080
-- **Backend API:** http://localhost:3000
-- **Health Check:** http://localhost:3000/health
+## Option 3: Use npm concurrently (Root directory):
+```bash
+npm run dev
+```
+This starts both servers in one terminal.
 
-## Testing the Flow
+## Access URLs:
+- **Frontend**: http://localhost:8080
+- **Backend API**: http://localhost:3000
 
-1. Open http://localhost:8080
-2. Login with Google (Firebase Auth)
-3. Navigate to "Register as NGO"
-4. **Step 1:** Upload Aadhaar/PAN → AI extracts data
-5. **Step 2:** Capture live photo → AI verifies face
-6. **Step 3:** Enter NGO details → Submit
+## Optional: Install CLIP for Better Verification
+```bash
+cd backend
+pip install -r requirements_verification.txt
+```
 
-## Troubleshooting
+## Environment Setup:
+Make sure `backend/.env` exists with:
+- `GEMINI_API_KEY=your_key` (for AI verification)
+- `MONGODB_URI=mongodb://localhost:27017` (or Atlas connection string)
 
-**Backend won't start:**
-- Check if port 3000 is available
-- Verify `.env` file exists in `backend/` folder
-- Ensure API keys are set correctly
-
-**Frontend can't connect to backend:**
-- Verify backend is running on port 3000
-- Check `CORS_ORIGINS` in backend `.env`
-- Look at browser console for errors
-
-**ID extraction fails:**
-- Verify PDF.co API key is correct
-- Check PDF.co account has credits
-- Ensure file is valid image/PDF format
-
-**Face verification fails:**
-- Verify Gemini API key is correct
-- Check API quota in Google AI Studio
-- Ensure photo shows clear face
-
----
-
-✅ **Ready to go!** Start both servers and test the registration flow.
-
+## Troubleshooting:
+1. **Port already in use**: Close other apps using ports 3000/8080
+2. **Module not found**: Run `npm install` in root and `backend` folders
+3. **Backend not starting**: Check `backend/.env` file exists
+4. **CLIP errors**: Install Python deps: `pip install -r backend/requirements_verification.txt`

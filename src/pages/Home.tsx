@@ -112,16 +112,10 @@ const Home = () => {
           // Also handle case where total_goal is 0 (no goal set)
           if (totalGoal === 0 || totalRaised < totalGoal) {
             // Get default icon based on category
-            let defaultIcon = "/api/placeholder/400/300";
-            const category = data.details?.donation_category?.toLowerCase() || "";
-            if (category.includes("disaster") || category.includes("flood")) {
-              defaultIcon = "https://via.placeholder.com/400x300/FF6B6B/FFFFFF?text=Disaster+Relief";
-            } else if (category.includes("education") || category.includes("school")) {
-              defaultIcon = "https://via.placeholder.com/400x300/4ECDC4/FFFFFF?text=Education";
-            } else if (category.includes("environment") || category.includes("green")) {
-              defaultIcon = "https://via.placeholder.com/400x300/95E1D3/FFFFFF?text=Environment";
-            } else {
-              defaultIcon = "https://via.placeholder.com/400x300/AA96DA/FFFFFF?text=NGO";
+            // Use local placeholder or campaign image
+            let defaultIcon = "/placeholder.svg";
+            if (campaign.image && campaign.image.startsWith('http')) {
+              defaultIcon = campaign.image;
             }
             
             campaigns.push({
@@ -188,8 +182,8 @@ const Home = () => {
                     Browse Campaigns <ArrowRight className="ml-2 w-5 h-5" />
                   </Link>
                 </Button>
-                <Button size="lg" variant="outline" asChild className="text-lg px-8">
-                  <Link to="/about">Learn How It Works</Link>
+                <Button size="lg" variant="default" asChild className="gradient-accent shadow-soft text-lg px-8">
+                  <Link to="/register-ngo">Register as NGO</Link>
                 </Button>
               </div>
             </div>

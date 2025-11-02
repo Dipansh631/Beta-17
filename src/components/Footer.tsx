@@ -25,13 +25,8 @@ const Footer = () => {
                 </Link>
               </li>
               <li>
-                <Link to="/about" className="text-sm text-muted-foreground transition-smooth hover:text-accent">
-                  How It Works
-                </Link>
-              </li>
-              <li>
                 <Link to="/register-ngo" className="text-sm text-muted-foreground transition-smooth hover:text-accent">
-                  For NGOs
+                  Register as NGO
                 </Link>
               </li>
             </ul>

@@ -34,6 +34,17 @@ const upload = multer({
  * Body: { file: File }
  */
 const uploadFile = async (req, res) => {
+  // Set CORS headers early
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  
+  // Handle OPTIONS preflight request
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
   try {
     console.log('📥 Received upload request:', {
       hasFile: !!req.file,

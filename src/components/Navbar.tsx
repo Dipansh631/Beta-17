@@ -51,12 +51,9 @@ const Navbar = () => {
             <Link to="/campaigns" className="text-sm font-medium transition-smooth hover:text-accent">
               Browse Campaigns
             </Link>
-            <Link to="/about" className="text-sm font-medium transition-smooth hover:text-accent">
-              How It Works
-            </Link>
-            <Link to="/register-ngo" className="text-sm font-medium transition-smooth hover:text-accent">
-              For NGOs
-            </Link>
+            <Button asChild variant="default" className="gradient-accent shadow-soft">
+              <Link to="/register-ngo">Register as NGO</Link>
+            </Button>
           </div>
 
           <div className="hidden md:flex items-center gap-3">
@@ -137,20 +134,9 @@ const Navbar = () => {
               >
                 Browse Campaigns
               </Link>
-              <Link
-                to="/about"
-                className="text-sm font-medium transition-smooth hover:text-accent"
-                onClick={() => setIsMenuOpen(false)}
-              >
-                How It Works
-              </Link>
-              <Link
-                to="/register-ngo"
-                className="text-sm font-medium transition-smooth hover:text-accent"
-                onClick={() => setIsMenuOpen(false)}
-              >
-                For NGOs
-              </Link>
+              <Button asChild className="w-full gradient-accent shadow-soft" onClick={() => setIsMenuOpen(false)}>
+                <Link to="/register-ngo">Register as NGO</Link>
+              </Button>
               <div className="flex flex-col gap-2 pt-2">
                 {currentUser ? (
                   <>

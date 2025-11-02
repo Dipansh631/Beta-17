@@ -673,10 +673,16 @@ const RegisterNGO = () => {
               </div>
             ))}
           </div>
-          <div className="flex justify-between mt-2 text-xs text-gray-600">
-            <span>ID Upload</span>
-            <span>Face Verify</span>
-            <span>NGO Details</span>
+          <div className="flex items-center mt-2 text-xs text-gray-600">
+            <div className="flex flex-1 items-start">
+              <span className="w-10 text-center">ID Upload</span>
+            </div>
+            <div className="flex flex-1 items-start justify-center">
+              <span className="w-10 text-center">Face Verify</span>
+            </div>
+            <div className="flex flex-1 items-start justify-end">
+              <span className="w-10 text-center">NGO Details</span>
+            </div>
           </div>
         </div>
 

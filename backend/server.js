@@ -19,23 +19,55 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware - Configure Helmet to allow images from same origin and allow inline images
+// Middleware - Configure Helmet with development-friendly CSP
+// In development, we allow more permissive CSP for DevTools and localhost connections
+const isDevelopment = process.env.NODE_ENV !== 'production';
+
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   crossOriginEmbedderPolicy: false,
-  contentSecurityPolicy: {
+  contentSecurityPolicy: isDevelopment ? false : {
+    // Only enforce strict CSP in production
     directives: {
       defaultSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "http://localhost:3000", "http://localhost:8080", "http://localhost:8081", "http://localhost:8082"],
+      connectSrc: [
+        "'self'",
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "http://localhost:8081",
+        "http://localhost:8082",
+        "ws://localhost:3000",
+        "ws://localhost:8080",
+      ],
+      imgSrc: [
+        "'self'",
+        "data:",
+        "blob:",
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "http://localhost:8081",
+        "http://localhost:8082",
+      ],
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
+      fontSrc: ["'self'", "data:"],
     },
   },
 }));
 app.use(cors({
-  origin: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:8080', 'http://localhost:3000', 'http://localhost:8081', 'http://localhost:8082'],
+  origin: process.env.CORS_ORIGINS?.split(',') || [
+    'http://localhost:8080',
+    'http://localhost:3000',
+    'http://localhost:8081',
+    'http://localhost:8082',
+    'http://127.0.0.1:8080',
+    'http://127.0.0.1:8081',
+    'http://127.0.0.1:8082'
+  ],
   credentials: true,
-  exposedHeaders: ['Content-Type', 'Content-Disposition'],
+  exposedHeaders: ['Content-Type', 'Content-Disposition', 'Access-Control-Allow-Origin'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -75,11 +107,21 @@ async function initializeMongoDB() {
 initializeMongoDB();
 
 // Routes
+// Handle OPTIONS preflight for upload endpoint
+app.options('/api/upload-file', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.sendStatus(200);
+});
+
 // File upload to MongoDB (uses multer from uploadFile.js)
 app.post('/api/upload-file', upload.single('file'), uploadFile);
+
 // Add OPTIONS handler for CORS preflight on file endpoint
 app.options('/api/file/:fileId', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.sendStatus(200);
@@ -97,6 +139,14 @@ app.get('/health', (req, res) => {
     status: 'ok', 
     message: 'NGO Registration API is running',
     mongodb: mongoConnected ? 'connected' : 'disconnected'
+  });
+});
+
+// Handle Chrome DevTools .well-known requests (harmless, just return 404 gracefully)
+app.get('/.well-known/*', (req, res) => {
+  res.status(404).json({ 
+    status: 'not found',
+    message: 'This endpoint is not available'
   });
 });
 
